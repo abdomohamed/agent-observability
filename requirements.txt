@@ -4,3 +4,4 @@ azure-identity
 azure-monitor-query 
 pandas
 applicationinsights 
+semantic-kernel
