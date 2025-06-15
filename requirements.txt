@@ -1,0 +1,6 @@
+streamlit 
+openai~=1.60.2
+azure-identity 
+azure-monitor-query 
+pandas
+applicationinsights 
