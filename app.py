@@ -58,7 +58,6 @@ def track_to_app_insights(rec: dict):
         properties={
             "user":   rec["user"],
             "tools":  ",".join(rec["tools"]),
-            "rounds": rec["rounds"],
         },
         measurements={
             "latency": rec["latency"],
@@ -138,7 +137,6 @@ Your job is to:
 async def query_agent_with_sk(user_message: str, selected_agent="auto") -> dict:
     start = time.time()
     used_tools = []
-    rounds = 1
     
     # Determine which tools might be needed based on message content
     if "search" in user_message.lower():
@@ -221,7 +219,6 @@ async def query_agent_with_sk(user_message: str, selected_agent="auto") -> dict:
         coordinator_agent_history.add_user_message(synthesis_prompt)
         final_synthesis = await kernel.chat(coordinator_agent_history)
         answer = final_synthesis.value
-        rounds = 3  # Planning + execution + synthesis
         
     else:
         # Use a single agent if only one tool is needed or specific agent selected
@@ -269,7 +266,6 @@ async def query_agent_with_sk(user_message: str, selected_agent="auto") -> dict:
         "latency": latency,
         "tokens":  tokens,
         "tools":   used_tools,
-        "rounds":  rounds,
         "timestamp": pd.Timestamp.utcnow()
     }
     
@@ -303,9 +299,8 @@ def fetch_history(hours: int = 1) -> pd.DataFrame:
         latency = todouble(todynamic(Measurements).latency),
         tokens  = toint(todynamic(Measurements).tokens),
         tools   = split(tostring(todynamic(Properties).tools), ","),
-        user    = tostring(todynamic(Properties).user),
-        rounds  = toint(todynamic(Properties).rounds)
-    | project Name, TimeGenerated, user, latency, tokens, tools, rounds
+        user    = tostring(todynamic(Properties).user)
+    | project Name, TimeGenerated, user, latency, tokens, tools
     | order by TimeGenerated desc
     """
 
@@ -321,7 +316,7 @@ def fetch_history(hours: int = 1) -> pd.DataFrame:
     except HttpResponseError as e:
         # if it was a missing-table error, try the next query
         print(f"Error querying logs: {e}")
-        return pd.DataFrame(columns=["timestamp","user","latency","tokens","tools","rounds"])
+        return pd.DataFrame(columns=["timestamp","user","latency","tokens","tools"])
         
 
     # if we got here, neither table existed
@@ -339,12 +334,16 @@ if 'conversation_history' not in st.session_state:
     
 # Sync the session conversation history with the agent chat histories
 def sync_conversation_history_with_agents():
-    # Reset the agent histories to just their system messages
+    """
+    Synchronize the conversation history from session state with the agent chat histories.
+    This ensures that agents have context from previous interactions.
+    """
+    # First, reset all agent histories to just their system messages
     search_agent_history.messages = search_agent_history.messages[:1]
     calculator_agent_history.messages = calculator_agent_history.messages[:1]
     coordinator_agent_history.messages = coordinator_agent_history.messages[:1]
     
-    # Add each message from the session history to the appropriate agent history
+    # Now replay the conversation history into the agent histories
     for msg in st.session_state.conversation_history:
         if msg["role"] == "user":
             # Add user messages to all agent histories
@@ -360,6 +359,11 @@ def sync_conversation_history_with_agents():
                 calculator_agent_history.add_assistant_message(msg["content"])
             else:  # Coordinator
                 coordinator_agent_history.add_assistant_message(msg["content"])
+
+# When the app starts, sync conversation history with agent chat histories
+if 'app_initialized' not in st.session_state:
+    sync_conversation_history_with_agents()
+    st.session_state.app_initialized = True
 
 col_q, col_dash = st.columns([1,2])
 
@@ -499,7 +503,6 @@ with col_q:
                     "content": rec["answer"],
                     "agent_type": agent_type,
                     "tools": rec["tools"],
-                    "rounds": rec["rounds"],
                     "latency": rec["latency"],
                     "timestamp": pd.Timestamp.utcnow()
                 })
@@ -507,11 +510,10 @@ with col_q:
                 # Add system message about performance metrics
                 st.session_state.conversation_history.append({
                     "role": "system",
-                    "content": f"Response generated in {rec['latency']:.2f}s using {rec['rounds']} round{'s' if rec['rounds'] > 1 else ''} with {len(rec['tools'])} tool{'s' if len(rec['tools']) > 1 else ''}{': ' + ', '.join(rec['tools']) if rec['tools'] else ''}",
+                    "content": f"Response generated in {rec['latency']:.2f}s using {len(rec['tools'])} tool{'s' if len(rec['tools']) > 1 else ''}{': ' + ', '.join(rec['tools']) if rec['tools'] else ''}",
                     "timestamp": pd.Timestamp.utcnow(),
                     "metrics": {
                         "latency": rec['latency'],
-                        "rounds": rec['rounds'],
                         "tools_count": len(rec['tools'])
                     }
                 })
@@ -578,13 +580,11 @@ with col_dash:
         p95_lat   = df.latency.quantile(0.95)
         avg_tok   = df.tokens.mean() if 'tokens' in df.columns and not df.tokens.empty else 0
         tot_q     = len(df)
-        rounds_avg = df.rounds.mean() if 'rounds' in df.columns and not df.rounds.empty else 1
         
-        c1,c2,c3,c4 = st.columns(4)
+        c1,c2,c3 = st.columns(3)
         c1.metric("Avg Latency", f"{avg_lat:.2f}s", f"p95 {p95_lat:.2f}s")
         c2.metric("Avg Tokens", f"{avg_tok:.0f}")
         c3.metric("Total Queries", tot_q)
-        c4.metric("Avg Rounds", f"{rounds_avg:.1f}")
 
         # trends
         st.subheader("Latency Over Time")
@@ -610,15 +610,8 @@ with col_dash:
         else:
             st.info("No tool usage data available.")
 
-        st.subheader("Rounds per Query")
-        if 'rounds' in df.columns and not df.rounds.empty:
-            rounds_pct = df.rounds.value_counts(normalize=True) * 100
-            st.bar_chart(rounds_pct)
-        else:
-            st.info("No rounds data available.")
-
         st.subheader("Recent Interactions")
-        display_cols = ["timestamp", "user", "latency", "tools", "rounds"]
+        display_cols = ["timestamp", "user", "latency", "tools"]
         display_cols = [col for col in display_cols if col in df.columns]
         
         st.dataframe(
