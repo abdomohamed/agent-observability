@@ -9,20 +9,22 @@ This application provides a multi-agent observability dashboard that demonstrate
 - **Performance Monitoring**: Tracks and visualizes metrics like latency, token usage, and agent round trips
 - **Telemetry Integration**: Uses Azure Application Insights to log agent interactions for historical analysis
 - **Interactive Dashboard**: Real-time visualization of agent performance and usage patterns
+- **Smart Diagnostics**: AI-powered analysis of historical interactions and performance patterns
 
 ## Architecture
 The application consists of:
 - A Streamlit-based web UI for user interaction
 - Semantic Kernel for agent orchestration and tool integration
-- Azure OpenAI Service for LLM capabilities
+- Azure AI Agents for tool and plugin definitions
+- Azure OpenAI Service for LLM capabilities (using GPT-4o)
 - Azure Application Insights for telemetry collection
 - Azure Log Analytics for historical data querying
 
 ## Setup Instructions
 
 ### Prerequisites
-- Python 3.9+
-- Azure OpenAI API access
+- Python 3.12+ (recommended)
+- Azure OpenAI API access with GPT-4o deployment
 - Azure Application Insights resource
 - Azure Log Analytics workspace
 
@@ -32,6 +34,9 @@ Create a Streamlit secrets file at `.streamlit/secrets.toml` with the following 
 ```toml
 [AZURE_OPENAI]
 API_KEY = "your-azure-openai-api-key"
+# Set the endpoint URL and deployment name in environment variables or here
+# ENDPOINT_URL = "your-azure-openai-endpoint"
+# DEPLOYMENT_NAME = "gpt-4o"
 
 [APP_INSIGHTS]
 INSTRUMENTATION_KEY = "your-app-insights-instrumentation-key"
@@ -87,24 +92,34 @@ The application will be available at `http://localhost:8501`.
    - View historical interaction data
    - Analyze tool usage patterns
    - Track conversation statistics
+   
+5. **Smart Diagnostics**:
+   - View in-depth analysis of historical interactions
+   - Get AI-powered insights about performance patterns
+   - Analyze response time distributions
+   - Identify potential system bottlenecks
 
 ## Dependencies
 - `streamlit`: Web application framework
-- `semantic-kernel`: Agent orchestration and tool integration
-- `openai`: Azure OpenAI API integration
+- `semantic-kernel>=1.33.0`: Agent orchestration and tool integration
+- `openai>=1.67`: Azure OpenAI API integration
 - `azure-identity`: Azure authentication
 - `azure-monitor-query`: Log Analytics queries
+- `azure-ai-agents>=1.1.0b1`: Azure AI Agents SDK
 - `pandas`: Data manipulation and analysis
 - `applicationinsights`: Telemetry collection
+- `plotly`: Data visualization
 
 ## Troubleshooting
 
 - **Authentication Issues**: Ensure your Azure credentials are correctly configured
 - **API Limits**: Check for rate limiting if the application becomes unresponsive
 - **Missing Data**: Verify App Insights is properly collecting telemetry
+- **GPT-4o Availability**: Make sure your Azure OpenAI resource has access to the GPT-4o model
+- **Python Environment**: Use Python 3.12+ for optimal compatibility
 
 ## Contributing
 Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
-[Specify the license under which this project is released]
+MIT License
