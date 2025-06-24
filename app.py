@@ -249,8 +249,8 @@ async def query_agent_with_sk(user_message: str, selected_agent="auto") -> dict:
         answer = agent_response.message.content
         
         # Extract token usage if available
-        if hasattr(agent_response, 'usage') and agent_response.usage:
-            tokens = agent_response.usage.total_tokens or 0
+        if hasattr(agent_response, 'metadata') and 'usage' in agent_response.metadata:
+            tokens = agent_response.metadata["usage"].completion_tokens or 0
             
         # Extract tool usage
         for tool_call in agent_response.message.tool_calls or []:
@@ -284,8 +284,8 @@ async def query_agent_with_sk(user_message: str, selected_agent="auto") -> dict:
             used_tools = ["web_search"]
             
             # Extract token usage if available
-            if hasattr(agent_response, 'usage') and agent_response.usage:
-                tokens = agent_response.usage.total_tokens or 0
+            if hasattr(agent_response, 'metadata') and 'usage' in agent_response.metadata:
+                tokens = agent_response.metadata["usage"].completion_tokens or 0
                 
         elif "calculator" in used_tools or selected_agent == "Calculator Agent":
             messages = st.session_state.calculator_agent_messages.copy()
@@ -307,8 +307,8 @@ async def query_agent_with_sk(user_message: str, selected_agent="auto") -> dict:
             used_tools = ["calculator"]
             
             # Extract token usage if available
-            if hasattr(agent_response, 'usage') and agent_response.usage:
-                tokens = agent_response.usage.total_tokens or 0
+            if hasattr(agent_response, 'metadata') and 'usage' in agent_response.metadata:
+                tokens = agent_response.metadata["usage"].completion_tokens or 0
                 
         else:
             # Use the coordinator as a general assistant if no specific tools needed
@@ -331,8 +331,9 @@ async def query_agent_with_sk(user_message: str, selected_agent="auto") -> dict:
             used_tools = []
             
             # Extract token usage if available
-            if hasattr(agent_response, 'usage') and agent_response.usage:
-                tokens = agent_response.usage.total_tokens or 0
+            if hasattr(agent_response, 'metadata') and 'usage' in agent_response.metadata:
+                tokens = agent_response.metadata["usage"].completion_tokens or 0
+            
     
     # Calculate metrics
     latency = time.time() - start
@@ -887,7 +888,7 @@ with dashboard_tab:
 
         # Recent interactions table
         st.subheader("Recent Interactions")
-        display_cols = ["timestamp", "user", "latency", "tools"]
+        display_cols = ["timestamp", "user", "latency", "tools", "tokens"]
         display_cols = [col for col in display_cols if col in df.columns]
         
         st.dataframe(
