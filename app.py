@@ -27,6 +27,7 @@ from azure.core.credentials import AzureKeyCredential
 from openai import AzureOpenAI
 
 from semantic_kernel.agents.chat_completion.chat_completion_agent import ChatCompletionAgent, ChatHistoryAgentThread
+from semantic_kernel.agents import AgentGroupChat
 from semantic_kernel.connectors.ai.open_ai.services.azure_chat_completion import (   
     AzureChatCompletion,
     AzureChatPromptExecutionSettings
@@ -162,18 +163,23 @@ def create_calculator_agent():
     return agent
 
 def create_coordinator_agent():
-    agent = ChatCompletionAgent(
-        kernel=kernel,
-        name="coordinator_agent",
-        instructions="""You are a coordinator agent that determines which specialized agent to use based on the user's question.
-Your job is to:
-1. Analyze the user's request
-2. Decide which specialized agent should handle the request: search agent, calculator agent, or both
-3. Synthesize responses from multiple agents if needed
-4. Provide a clear, helpful response to the user""",
-        plugins=[SearchPlugin(), CalculatorPlugin()],
-        arguments=KernelArguments(settings=settings),
+    agent  = AgentGroupChat(
+        agents=[create_search_agent(), create_calculator_agent()],
+        termination_strategy=None,  # Use default termination strategy
     )
+    
+#     agent = ChatCompletionAgent(
+#         kernel=kernel,
+#         name="coordinator_agent",
+#         instructions="""You are a coordinator agent that determines which specialized agent to use based on the user's question.
+# Your job is to:
+# 1. Analyze the user's request
+# 2. Decide which tool the request: search agent, calculator agent, or both
+# 3. Synthesize responses from multiple agents if needed
+# 4. Provide a clear, helpful response to the user""",
+#         plugins=[SearchPlugin(), CalculatorPlugin()],
+#         arguments=KernelArguments(settings=settings),
+#     )
     return agent
 
 # Initialize agents
@@ -316,24 +322,21 @@ async def query_agent_with_sk(user_message: str, selected_agent="auto") -> dict:
             messages = st.session_state.coordinator_agent_messages.copy()
             messages.append(ChatMessageContent(role=AuthorRole.USER, content=user_message, metadata=metadata))
 
-            agent_response = await coordinator_agent.get_response(
-                messages=messages,
-                temperature=0.5,
-                max_tokens=500
-            )
-            
-            # Update the message history
-            st.session_state.coordinator_agent_messages = messages.copy()
-            st.session_state.coordinator_agent_messages.append(
-                ChatMessageContent(role=AuthorRole.ASSISTANT, content=agent_response.message.content, metadata=metadata)
-            )
-            
-            answer = agent_response.message.content
-            used_tools = []
-            
-            # Extract token usage if available
-            if hasattr(agent_response, 'metadata') and 'usage' in agent_response.metadata:
-                tokens = agent_response.metadata["usage"].completion_tokens or 0
+            await coordinator_agent.add_chat_message(message=ChatMessageContent(role=AuthorRole.USER, content=user_message, metadata=metadata))
+            async for response in coordinator_agent.invoke():
+                agent_response = response
+                # Update the message history
+                st.session_state.coordinator_agent_messages = messages.copy()
+                st.session_state.coordinator_agent_messages.append(
+                    ChatMessageContent(role=AuthorRole.ASSISTANT, content=agent_response.content, metadata=metadata)
+                )
+
+                answer = agent_response.content
+                used_tools = []
+                
+                # Extract token usage if available
+                if hasattr(agent_response, 'metadata') and 'usage' in agent_response.metadata:
+                    tokens = agent_response.metadata["usage"].completion_tokens or 0
             
     
     # Calculate metrics
