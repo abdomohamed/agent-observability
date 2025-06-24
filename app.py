@@ -1,22 +1,37 @@
+from importlib import metadata
+from re import A
 import time
 from datetime import timedelta
 import asyncio
 import json
 
+from httpx import Auth
 import pandas as pd
 import streamlit as st
 import os
 from io import BytesIO
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Semantic Kernel and Azure OpenAI imports
+# Azure AI Agents and Semantic Kernel imports
 # ──────────────────────────────────────────────────────────────────────────────
 import semantic_kernel as sk
 from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion
-from semantic_kernel.functions.kernel_function import KernelFunction
+from semantic_kernel.functions import kernel_function, KernelArguments
 from semantic_kernel.contents import ChatHistory
 from semantic_kernel.connectors.ai.open_ai import OpenAIChatPromptExecutionSettings
+
+# Azure AI Agents imports
+from semantic_kernel.agents import ChatCompletionAgent
+from azure.core.credentials import AzureKeyCredential
 from openai import AzureOpenAI
+
+from semantic_kernel.agents.chat_completion.chat_completion_agent import ChatCompletionAgent, ChatHistoryAgentThread
+from semantic_kernel.connectors.ai.open_ai.services.azure_chat_completion import (   
+    AzureChatCompletion,
+    AzureChatPromptExecutionSettings
+)
+from semantic_kernel.contents import FunctionCallContent, FunctionResultContent, AuthorRole
+from semantic_kernel.contents.chat_message_content import ChatMessageContent
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Azure OpenAI Configuration
@@ -79,15 +94,20 @@ WORKSPACE_ID  = st.secrets["AZURE"]["WORKSPACE_ID"]
 # ──────────────────────────────────────────────────────────────────────────────
 # Tool definitions and agent setup
 # ──────────────────────────────────────────────────────────────────────────────
-def call_tool(tool_name: str, prompt: str) -> str:
-    time.sleep(0.4)
-    return f"[{tool_name} result for '{prompt}']\n"
 
-# Create a Tools plugin and add it to the kernel
-class ToolsPlugin:
-    def __init__(self):
-        pass
-        
+class BasePlugin():
+    """ A base class for defining function plugins that can be used by agents.
+    """
+
+    def call_tool(self, tool_name: str, prompt: str) -> str:
+        time.sleep(0.4)
+        return f"[{tool_name} result for '{prompt}']\n"
+
+    # Define tools using the Azure AI Agents SDK
+class SearchPlugin(BasePlugin):
+    """ A plugin for web search functionality. """
+    
+    @kernel_function(description="Search the web for information")
     async def web_search(self, query: str) -> str:
         """
         Search the web for information.
@@ -98,38 +118,90 @@ class ToolsPlugin:
         Returns:
             Search results
         """
-        return call_tool("web_search", query)
-    
-    async def calculator(self, expression: str) -> str:
+        return self.call_tool("web_search", query)
+
+
+class CalculatorPlugin(BasePlugin):
+    @kernel_function(description="Provide web search capabilities")
+    async def web_search(self, query: str) -> str:
         """
-        Perform calculations.
+        Search the web for information.
         
         Args:
-            expression: The calculation to perform
-            
+            query: The search query
+                
         Returns:
-            Calculation result
+            Search results
         """
-        return call_tool("calculator", expression)
+        return self.call_tool("web_search", query)
 
-# Register the plugin with the kernel
-tools_plugin = ToolsPlugin()
-kernel.add_plugin(tools_plugin, plugin_name="Tools")
+# Create agents with different tools and system prompts
 
-# Create chat histories for our agents
-search_agent_history = ChatHistory()
-search_agent_history.add_system_message("You are a specialized agent that searches the web for information. Use the web_search function when the user asks for information that might be found online.")
+settings = AzureChatPromptExecutionSettings(service_id="AzureOpenAI")
 
-calculator_agent_history = ChatHistory()
-calculator_agent_history.add_system_message("You are a specialized agent that performs calculations. Use the calculator function when the user asks for any mathematical operations.")
+def create_search_agent():
+    agent = ChatCompletionAgent(
+        kernel=kernel,
+        name="search_agent",
+        instructions="You are a specialized agent that searches the web for information. Use the web_search function when the user asks for information that might be found online.",
+        plugins=[SearchPlugin()],
+        arguments=KernelArguments(settings=settings),
+    )
+    return agent
 
-coordinator_agent_history = ChatHistory()
-coordinator_agent_history.add_system_message("""You are a coordinator agent that determines which specialized agent to use based on the user's question.
+def create_calculator_agent():
+    agent = ChatCompletionAgent(
+        kernel=kernel,
+        name="calculator_agent",
+        instructions="You are a specialized agent that performs calculations. Use the calculator function when the user asks for any mathematical operations.",
+        plugins=[CalculatorPlugin()],
+        arguments=KernelArguments(settings=settings),
+    )
+     
+    return agent
+
+def create_coordinator_agent():
+    agent = ChatCompletionAgent(
+        kernel=kernel,
+        name="coordinator_agent",
+        instructions="""You are a coordinator agent that determines which specialized agent to use based on the user's question.
 Your job is to:
 1. Analyze the user's request
 2. Decide which specialized agent should handle the request: search agent, calculator agent, or both
 3. Synthesize responses from multiple agents if needed
-4. Provide a clear, helpful response to the user""")
+4. Provide a clear, helpful response to the user""",
+        plugins=[SearchPlugin(), CalculatorPlugin()],
+        arguments=KernelArguments(settings=settings),
+    )
+    return agent
+
+# Initialize agents
+search_agent = None
+calculator_agent = None
+coordinator_agent = None
+
+def initialize_agents():
+    """Initialize the agents if they haven't been created yet"""
+    global search_agent, calculator_agent, coordinator_agent
+    
+    if search_agent is None:
+        search_agent = create_search_agent()
+    
+    if calculator_agent is None:
+        calculator_agent = create_calculator_agent()
+    
+    if coordinator_agent is None:
+        coordinator_agent = create_coordinator_agent()
+
+# Keep conversation histories separate for each agent
+if 'search_agent_messages' not in st.session_state:
+    st.session_state.search_agent_messages = []
+    
+if 'calculator_agent_messages' not in st.session_state:
+    st.session_state.calculator_agent_messages = []
+    
+if 'coordinator_agent_messages' not in st.session_state:
+    st.session_state.coordinator_agent_messages = []
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Agent invocation
@@ -137,6 +209,12 @@ Your job is to:
 async def query_agent_with_sk(user_message: str, selected_agent="auto") -> dict:
     start = time.time()
     used_tools = []
+    answer = ""
+    tokens = 0
+    metadata = {"user_message": user_message, "selected_agent": selected_agent, "timestamp": pd.Timestamp.utcnow()}
+    
+    # Initialize agents if needed
+    initialize_agents()
     
     # Determine which tools might be needed based on message content
     if "search" in user_message.lower():
@@ -144,120 +222,120 @@ async def query_agent_with_sk(user_message: str, selected_agent="auto") -> dict:
     if "calc" in user_message.lower():
         used_tools.append("calculator")
     
-    # We no longer reset the history to maintain conversation context between queries
-    # The agent will now have access to previous messages
-    
     # Force specific agent if selected
     if selected_agent == "Search Agent":
         used_tools = ["web_search"]
     elif selected_agent == "Calculator Agent":
         used_tools = ["calculator"]
     
-    chat_service = kernel.get_service(service_id="AzureOpenAI")
-    execution_settings = OpenAIChatPromptExecutionSettings()
-    
     # Use multi-agent approach if auto selected and multiple tools needed
     if selected_agent == "Auto (Coordinator)" and len(used_tools) > 1:
-        # First, ask coordinator to plan
-        coordinator_agent_history.add_user_message(f"""
-        User question: {user_message}
-        
-        I need to coordinate between different specialized agents to answer this question.
-        Which agents should handle this request and how should I break down the task?
-        """)
-        
-        
-        coordinator_response = await chat_service.get_chat_message_content(
-            coordinator_agent_history,
-            settings=execution_settings,
-            max_tokens=500,
+        # Use coordinator agent with its history
+        messages = st.session_state.coordinator_agent_messages.copy()
+        messages.append(ChatMessageContent(role=AuthorRole.USER, content=user_message, metadata=metadata))
+
+        agent_response = await coordinator_agent.get_response(
+            messages=messages,
             temperature=0.5,
+            max_tokens=500
         )
-        print(coordinator_response)
-        coordinator_plan = coordinator_response.content
-        coordinator_agent_history.add_assistant_message(coordinator_plan)
         
-        # Execute search if needed
-        search_result = ""
-        if "web_search" in used_tools:
-            search_agent_history.add_user_message(user_message)
-            search_response =  await chat_service.get_chat_message_content(
-                search_agent_history,
-                settings=execution_settings,
-                max_tokens=500,
-                temperature=0.5,
-            )
-            search_result = search_response.content
-            search_agent_history.add_assistant_message(search_result)
+        # Update the message history
+        st.session_state.coordinator_agent_messages = messages.copy()
+        st.session_state.coordinator_agent_messages.append(
+            ChatMessageContent(role=AuthorRole.ASSISTANT, content=agent_response.message.content, metadata=metadata)
+        )
         
-        # Execute calculation if needed
-        calc_result = ""
-        if "calculator" in used_tools:
-            calculator_agent_history.add_user_message(user_message)
-            calc_response =  await chat_service.get_chat_message_content(
-                calculator_agent_history,
-                settings=execution_settings,
-                max_tokens=500,
-                temperature=0.5,
-            )
-            calc_result = calc_response.content
-            calculator_agent_history.add_assistant_message(calc_result)
+        answer = agent_response.message.content
         
-        # Have coordinator synthesize the final answer
-        synthesis_prompt = f"""
-        User question: {user_message}
-        
-        Here are the results from specialized agents:
-        
-        Search agent: {search_result if search_result else "Not used"}
-        
-        Calculator agent: {calc_result if calc_result else "Not used"}
-        
-        Please synthesize a final, coherent answer for the user.
-        """
-        
-        coordinator_agent_history.add_user_message(synthesis_prompt)
-        final_synthesis = await kernel.chat(coordinator_agent_history)
-        answer = final_synthesis.value
+        # Extract token usage if available
+        if hasattr(agent_response, 'usage') and agent_response.usage:
+            tokens = agent_response.usage.total_tokens or 0
+            
+        # Extract tool usage
+        for tool_call in agent_response.message.tool_calls or []:
+            tool_name = tool_call.function.name
+            if tool_name not in used_tools:
+                used_tools.append(tool_name)
         
     else:
         # Use a single agent if only one tool is needed or specific agent selected
         if "web_search" in used_tools or selected_agent == "Search Agent":
-            search_agent_history.add_user_message(user_message)
-            agent_response =  await chat_service.get_chat_message_content(
-                search_agent_history,
-                settings=execution_settings,
-                max_tokens=500,
+            messages = st.session_state.search_agent_messages.copy()
+            messages.append(ChatMessageContent(
+                role=AuthorRole.USER,
+                content=user_message,
+                metadata=metadata
+            ))
+              
+            agent_response = await search_agent.get_response(
+                messages=messages,
                 temperature=0.5,
+                max_tokens=500
             )
-            answer = agent_response.content
             
-            used_tools = ["web_search"]
-        elif "calculator" in used_tools or selected_agent == "Calculator Agent":
-            calculator_agent_history.add_user_message(user_message)
-            agent_response = await chat_service.get_chat_message_content(
-                calculator_agent_history,
-                settings=execution_settings,
-                max_tokens=500,
-                temperature=0.5,
+            # Update the message history
+            st.session_state.search_agent_messages = messages.copy()
+            st.session_state.search_agent_messages.append(
+                ChatMessageContent(role=AuthorRole.ASSISTANT, content=agent_response.message.content, metadata=metadata)
             )
-            answer = agent_response.content
+            
+            answer = agent_response.message.content
+            used_tools = ["web_search"]
+            
+            # Extract token usage if available
+            if hasattr(agent_response, 'usage') and agent_response.usage:
+                tokens = agent_response.usage.total_tokens or 0
+                
+        elif "calculator" in used_tools or selected_agent == "Calculator Agent":
+            messages = st.session_state.calculator_agent_messages.copy()
+            messages.append(ChatMessageContent(role=AuthorRole.USER, content=user_message, metadata=metadata))
+
+            agent_response = await calculator_agent.get_response(
+                messages=messages,
+                temperature=0.5,
+                max_tokens=500
+            )
+            
+            # Update the message history
+            st.session_state.calculator_agent_messages = messages.copy()
+            st.session_state.calculator_agent_messages.append(
+                ChatMessageContent(role=AuthorRole.ASSISTANT, content=agent_response.message.content, metadata=metadata)
+            )
+            
+            answer = agent_response.message.content
             used_tools = ["calculator"]
+            
+            # Extract token usage if available
+            if hasattr(agent_response, 'usage') and agent_response.usage:
+                tokens = agent_response.usage.total_tokens or 0
+                
         else:
             # Use the coordinator as a general assistant if no specific tools needed
-            coordinator_agent_history.add_user_message(user_message)
-            agent_response =  await chat_service.get_chat_message_content(
-                coordinator_agent_history,
-                settings=execution_settings,
-                max_tokens=500,
+            messages = st.session_state.coordinator_agent_messages.copy()
+            messages.append(ChatMessageContent(role=AuthorRole.USER, content=user_message, metadata=metadata))
+
+            agent_response = await coordinator_agent.get_response(
+                messages=messages,
                 temperature=0.5,
+                max_tokens=500
             )
-            answer = agent_response.content
+            
+            # Update the message history
+            st.session_state.coordinator_agent_messages = messages.copy()
+            st.session_state.coordinator_agent_messages.append(
+                ChatMessageContent(role=AuthorRole.ASSISTANT, content=agent_response.message.content, metadata=metadata)
+            )
+            
+            answer = agent_response.message.content
             used_tools = []
+            
+            # Extract token usage if available
+            if hasattr(agent_response, 'usage') and agent_response.usage:
+                tokens = agent_response.usage.total_tokens or 0
     
     # Calculate metrics
     latency = time.time() - start
-    tokens = 0  # Semantic Kernel doesn't expose token usage directly
     
     # Create record for tracking
     rec = {
@@ -319,9 +397,6 @@ def fetch_history(hours: int = 1) -> pd.DataFrame:
         return pd.DataFrame(columns=["timestamp","user","latency","tokens","tools"])
         
 
-    # if we got here, neither table existed
-    
-
 # ──────────────────────────────────────────────────────────────────────────────
 # Streamlit UI
 # ──────────────────────────────────────────────────────────────────────────────
@@ -335,30 +410,30 @@ if 'conversation_history' not in st.session_state:
 # Sync the session conversation history with the agent chat histories
 def sync_conversation_history_with_agents():
     """
-    Synchronize the conversation history from session state with the agent chat histories.
+    Synchronize the conversation history from session state with the agent messages.
     This ensures that agents have context from previous interactions.
     """
-    # First, reset all agent histories to just their system messages
-    search_agent_history.messages = search_agent_history.messages[:1]
-    calculator_agent_history.messages = calculator_agent_history.messages[:1]
-    coordinator_agent_history.messages = coordinator_agent_history.messages[:1]
+    # First, reset all agent messages
+    st.session_state.search_agent_messages = []
+    st.session_state.calculator_agent_messages = []
+    st.session_state.coordinator_agent_messages = []
     
-    # Now replay the conversation history into the agent histories
+    # Now replay the conversation history into the agent messages
     for msg in st.session_state.conversation_history:
-        if msg["role"] == "user":
+        if msg.role == AuthorRole.USER:
             # Add user messages to all agent histories
-            search_agent_history.add_user_message(msg["content"])
-            calculator_agent_history.add_user_message(msg["content"])
-            coordinator_agent_history.add_user_message(msg["content"])
-        elif msg["role"] == "assistant":
+            st.session_state.search_agent_messages.append(ChatMessageContent(role=AuthorRole.USER, content=msg.content))
+            st.session_state.calculator_agent_messages.append(ChatMessageContent(role=AuthorRole.USER, content=msg.content))
+            st.session_state.coordinator_agent_messages.append(ChatMessageContent(role=AuthorRole.USER, content=msg.content))
+        elif msg.role == AuthorRole.ASSISTANT:
             # Add assistant messages to the appropriate agent history
-            agent_type = msg.get("agent_type", "Coordinator")
+            agent_type = msg.metadata.get("agent_type", "Coordinator")
             if agent_type == "Search":
-                search_agent_history.add_assistant_message(msg["content"])
+                st.session_state.search_agent_messages.append(ChatMessageContent(role=AuthorRole.ASSISTANT, content=msg.content))
             elif agent_type == "Calculator":
-                calculator_agent_history.add_assistant_message(msg["content"])
+                st.session_state.calculator_agent_messages.append(ChatMessageContent(role=AuthorRole.ASSISTANT, content=msg.content))
             else:  # Coordinator
-                coordinator_agent_history.add_assistant_message(msg["content"])
+                st.session_state.coordinator_agent_messages.append(ChatMessageContent(role=AuthorRole.ASSISTANT, content=msg.content))
 
 # When the app starts, sync conversation history with agent chat histories
 if 'app_initialized' not in st.session_state:
@@ -376,10 +451,10 @@ with col_q:
     with col1:
         if st.button("Clear Conversation"):
             st.session_state.conversation_history = []
-            # Reset agent histories to just their system messages
-            search_agent_history.messages = search_agent_history.messages[:1]
-            calculator_agent_history.messages = calculator_agent_history.messages[:1]
-            coordinator_agent_history.messages = coordinator_agent_history.messages[:1]
+            # Reset agent message histories
+            st.session_state.search_agent_messages = []
+            st.session_state.calculator_agent_messages = []
+            st.session_state.coordinator_agent_messages = []
             st.rerun()
     
     with col2:
@@ -403,38 +478,29 @@ with col_q:
     st.subheader("Conversation History")
     
     # Add filter options
-    filter_options = ["All", "User", "Assistant", "System"]
-    selected_filter = st.radio("Filter by message type:", filter_options, horizontal=True)
-    
     conversation_container = st.container()
     with conversation_container:
         for message in st.session_state.conversation_history:
-            # Skip messages based on filter
-            if (selected_filter == "User" and message["role"] != "user") or \
-               (selected_filter == "Assistant" and message["role"] != "assistant") or \
-               (selected_filter == "System" and message["role"] != "system"):
-                continue
-                
             # Format timestamp
-            timestamp = message.get("timestamp", pd.Timestamp.utcnow())
+            timestamp = message.metadata.get("timestamp", pd.Timestamp.utcnow())
             time_str = timestamp.strftime("%H:%M:%S")
-            
-            if message["role"] == "user":
+
+            if message.role == AuthorRole.USER:
                 st.markdown(f"""
                 <div style='background-color: #e6f7ff; padding: 10px; border-radius: 5px; margin-bottom: 10px;'>
                     <div style='display: flex; justify-content: space-between;'>
                         <strong>User:</strong>
                         <span style='color: #666; font-size: 0.8em;'>{time_str}</span>
                     </div>
-                    <div style='margin-top: 5px;'>{message['content']}</div>
+                    <div style='margin-top: 5px;'>{message.content}</div>
                 </div>
                 """, unsafe_allow_html=True)
-            
-            elif message["role"] == "assistant":
+
+            elif message.role == AuthorRole.ASSISTANT:
                 agent_type = "Coordinator"
-                if "agent_type" in message:
-                    agent_type = message["agent_type"]
-                
+                if "agent_type" in message.metadata:
+                    agent_type = message.metadata["agent_type"]
+
                 # Different background colors for different agent types
                 bg_color = "#f0f0f0"  # Default gray
                 if agent_type == "Search":
@@ -443,27 +509,27 @@ with col_q:
                     bg_color = "#e6e6ff"  # Light blue
                 
                 tools_used = ""
-                if "tools" in message and message["tools"]:
-                    tools_used = f" <span style='font-size: 0.9em; color: #666;'>(Tools: {', '.join(message['tools'])})</span>"
-                
+                if "tools" in message.metadata and message.metadata["tools"]:
+                    tools_used = f" <span style='font-size: 0.9em; color: #666;'>(Tools: {', '.join(message.metadata['tools'])})</span>"
+
                 st.markdown(f"""
                 <div style='background-color: {bg_color}; padding: 10px; border-radius: 5px; margin-bottom: 10px;'>
                     <div style='display: flex; justify-content: space-between;'>
                         <strong>{agent_type} Agent{tools_used}</strong>
                         <span style='color: #666; font-size: 0.8em;'>{time_str}</span>
                     </div>
-                    <div style='margin-top: 5px;'>{message['content']}</div>
+                    <div style='margin-top: 5px;'>{message.content}</div>
                 </div>
                 """, unsafe_allow_html=True)
-            
-            elif message["role"] == "system":
+
+            elif message.role == AuthorRole.SYSTEM:
                 st.markdown(f"""
                 <div style='background-color: #fff3cd; padding: 10px; border-radius: 5px; margin-bottom: 10px;'>
                     <div style='display: flex; justify-content: space-between;'>
                         <strong>System:</strong>
                         <span style='color: #666; font-size: 0.8em;'>{time_str}</span>
                     </div>
-                    <div style='margin-top: 5px;'>{message['content']}</div>
+                    <div style='margin-top: 5px;'>{message.content}</div>
                 </div>
                 """, unsafe_allow_html=True)
     
@@ -477,12 +543,16 @@ with col_q:
     if st.button("Submit"):
         if user_input:  # Only proceed if there's input
             # Add user message to conversation history
-            st.session_state.conversation_history.append({
-                "role": "user",
-                "content": user_input,
-                "timestamp": pd.Timestamp.utcnow()
-            })
-            
+            st.session_state.conversation_history.append(
+                ChatMessageContent(
+                    role=AuthorRole.USER,
+                    content=user_input,
+                    metadata= {
+                        "timestamp": pd.Timestamp.utcnow()
+                    }
+                )
+            )
+
             # Sync conversation history with agent chat histories
             sync_conversation_history_with_agents()
             
@@ -498,28 +568,35 @@ with col_q:
                         agent_type = "Calculator"
                 
                 # Add assistant response to conversation history
-                st.session_state.conversation_history.append({
-                    "role": "assistant",
-                    "content": rec["answer"],
-                    "agent_type": agent_type,
-                    "tools": rec["tools"],
-                    "latency": rec["latency"],
-                    "timestamp": pd.Timestamp.utcnow()
-                })
-                
+                st.session_state.conversation_history.append(
+                    ChatMessageContent(
+                        role=AuthorRole.ASSISTANT,
+                        content=rec["answer"],
+                        metadata={
+                            "user": rec["user"],
+                            "tokens": rec["tokens"],
+                            "agent_type": agent_type,
+                            "tools": rec["tools"],
+                            "timestamp": pd.Timestamp.utcnow(),
+                            "latency": rec["latency"],
+                        }
+                    )
+                )
+
                 # Add system message about performance metrics
-                st.session_state.conversation_history.append({
-                    "role": "system",
-                    "content": f"Response generated in {rec['latency']:.2f}s using {len(rec['tools'])} tool{'s' if len(rec['tools']) > 1 else ''}{': ' + ', '.join(rec['tools']) if rec['tools'] else ''}",
-                    "timestamp": pd.Timestamp.utcnow(),
-                    "metrics": {
-                        "latency": rec['latency'],
-                        "tools_count": len(rec['tools'])
-                    }
-                })
-                
-                # Force a rerun to update the conversation display
-                st.rerun()
+                st.session_state.conversation_history.append(
+                    ChatMessageContent(
+                        role=AuthorRole.SYSTEM,
+                        content=f"Response generated in {rec['latency']:.2f}s using {len(rec['tools'])} tool{'s' if len(rec['tools']) > 1 else ''}{': ' + ', '.join(rec['tools']) if rec['tools'] else ''}",
+                        metadata={
+                            "metrics": {
+                                "latency": rec['latency'],
+                                "tools_count": len(rec['tools'])
+                            },
+                            "timestamp": pd.Timestamp.utcnow()
+                        }
+                    )
+                )
 
 with col_dash:
     st.header("📊 Live Dashboard")
@@ -529,10 +606,10 @@ with col_dash:
         st.subheader("Current Conversation Stats")
         
         # Count message types
-        user_messages = sum(1 for msg in st.session_state.conversation_history if msg["role"] == "user")
-        assistant_messages = sum(1 for msg in st.session_state.conversation_history if msg["role"] == "assistant")
-        system_messages = sum(1 for msg in st.session_state.conversation_history if msg["role"] == "system")
-        
+        user_messages = sum(1 for msg in st.session_state.conversation_history if msg.role == AuthorRole.USER)
+        assistant_messages = sum(1 for msg in st.session_state.conversation_history if msg.role == AuthorRole.ASSISTANT)
+        system_messages = sum(1 for msg in st.session_state.conversation_history if msg.role == AuthorRole.SYSTEM)
+
         # Calculate metrics from the conversation
         agent_types = {}
         tools_used = []
@@ -540,15 +617,15 @@ with col_dash:
         latency_count = 0
         
         for msg in st.session_state.conversation_history:
-            if msg["role"] == "assistant" and "agent_type" in msg:
-                agent_type = msg.get("agent_type", "Coordinator")
+            if msg.role == AuthorRole.ASSISTANT and "agent_type" in msg.metadata:
+                agent_type = msg.metadata.get("agent_type", "Coordinator")
                 agent_types[agent_type] = agent_types.get(agent_type, 0) + 1
-                
-                if "tools" in msg and msg["tools"]:
-                    tools_used.extend(msg["tools"])
-            
-            if msg["role"] == "system" and "metrics" in msg and "latency" in msg["metrics"]:
-                total_latency += msg["metrics"]["latency"]
+
+                if "tools" in msg.metadata and msg.metadata["tools"]:
+                    tools_used.extend(msg.metadata["tools"])
+
+            if msg.role == AuthorRole.SYSTEM and "metrics" in msg.metadata and "latency" in msg.metadata["metrics"]:
+                total_latency += msg.metadata["metrics"]["latency"]
                 latency_count += 1
         
         # Display conversation stats

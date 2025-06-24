@@ -1,7 +1,8 @@
 streamlit 
-openai~=1.60.2
+openai>=1.67
 azure-identity 
 azure-monitor-query 
 pandas
 applicationinsights 
-semantic-kernel
+semantic-kernel==1.33.0
+azure-ai-agents>=1.1.0b1
