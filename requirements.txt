@@ -6,3 +6,4 @@ pandas
 applicationinsights 
 semantic-kernel==1.33.0
 azure-ai-agents>=1.1.0b1
+plotly
