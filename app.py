@@ -1105,24 +1105,75 @@ with diagnostics_tab:
                     "time_range_hours": diagnostic_hours
                 }
                 
-                # Create a prompt for the LLM analysis
-                prompt = f"""
-                You are an AI operations analyst examining transaction data from an agent-based system. 
                 
+                # Define hourly transaction counts if not already defined
+                hourly_counts = pd.DataFrame()
+                if "timestamp" in df_diagnostics.columns:
+                    # Ensure timestamp is datetime if not already
+                    if not pd.api.types.is_datetime64_any_dtype(df_diagnostics.timestamp):
+                        df_diagnostics['timestamp'] = pd.to_datetime(df_diagnostics.timestamp)
+                    
+                    # Group by hour and count transactions
+                    if 'hour' not in df_diagnostics.columns:
+                        df_diagnostics['hour'] = df_diagnostics.timestamp.dt.floor('H')
+                    
+                    hourly_counts = df_diagnostics.groupby('hour').size().reset_index(name='count')
+                
+                # Create a prompt for the LLM analysis with tabular data
+                prompt = f"""
+                You are an expert AI system performance analyst. I will provide you with log data from an AI assistant system.
+
                 Here's a summary of the data from the last {diagnostic_hours} hours:
                 - Total transactions: {summary_data['total_transactions']}
                 - Average latency: {summary_data['avg_latency']:.2f}s
                 - P95 latency: {summary_data['p95_latency']:.2f}s
                 - Maximum latency: {summary_data['max_latency']:.2f}s
                 - Tool usage distribution: {summary_data['tool_distribution']}
-                
-                Based on this data, please provide:
-                1. A brief summary of the system's performance
-                2. Any notable patterns or anomalies
-                3. Recommendations for improving performance
-                4. Potential issues that might need attention
-                
-                Focus on operational insights that would be valuable for a system administrator.
+
+                Here's a sample of the transaction logs (up to 40 records):
+                ```
+                {df_diagnostics.head(40).reset_index(drop=True).to_string()}
+                ```
+
+                Hourly transaction volume:
+                ```
+                {hourly_counts.to_string(index=False) if not hourly_counts.empty else "No hourly data available"}
+                ```
+
+                Additional metrics:
+                - Number of unique queries: {df_diagnostics['user'].nunique() if 'user' in df_diagnostics.columns else 'N/A'}
+                - High-latency transactions (>3s): {(df_diagnostics['latency'] > 3).sum() if 'latency' in df_diagnostics.columns else 0} ({(df_diagnostics['latency'] > 3).mean() * 100:.1f}% of total)
+                - Tools used per transaction: {sum(len(t) if isinstance(t, list) else len(t.split(',')) if isinstance(t, str) else 0 for t in df_diagnostics.tools) / len(df_diagnostics):.2f} avg
+
+                Please analyze the logs for potential performance issues by:
+
+                1. Identifying patterns in latency spikes:
+                   - Which types of queries consistently have higher latency?
+                   - Are there specific patterns in high-latency transactions?
+
+                2. Analyzing correlations between:
+                   - Query complexity and latency
+                   - Tool usage and latency (e.g., web_search vs. calculator vs. no tools)
+                   - Query length/type and latency
+                   - Time of day and performance
+
+                3. Finding anomalies:
+                   - Unusual latency outliers (significantly above average)
+                   - Inconsistent latency for similar queries
+                   - Any irregular patterns in system behavior
+
+                4. Comparing performance:
+                   - Queries with similar content but different latency
+                   - Performance differences between tool-using vs. non-tool queries
+                   - Variations in performance across different time periods
+
+                5. Providing specific recommendations:
+                   - Which query types should be optimized?
+                   - Are there specific tools that need performance improvement?
+                   - Is there a pattern of degraded performance at certain times?
+                   - Are there specific user patterns that could be optimized?
+
+                Focus on actionable insights that would help improve system performance.
                 """
                 
                 # Call the Azure OpenAI API for analysis
