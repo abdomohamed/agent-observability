@@ -400,8 +400,86 @@ def fetch_history(hours: int = 1) -> pd.DataFrame:
 # ──────────────────────────────────────────────────────────────────────────────
 # Streamlit UI
 # ──────────────────────────────────────────────────────────────────────────────
-st.set_page_config(layout="wide")
-st.title("🕵️ Multi-Agent Observability (Semantic Kernel + App Insights)")
+st.set_page_config(
+    page_title="Agent Observability",
+    page_icon="🕵️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Apply custom CSS for better UI
+st.markdown("""
+<style>
+    /* Main app styling */
+    .main .block-container {
+        padding-top: 2rem;
+        padding-bottom: 2rem;
+    }
+    
+    /* Chat message styling */
+    .user-message {
+        background-color: #e6f7ff;
+        border-left: 5px solid #1890ff;
+        padding: 15px;
+        border-radius: 10px;
+        margin-bottom: 15px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    }
+    
+    .assistant-message {
+        background-color: #f6f8fa;
+        border-left: 5px solid #52c41a;
+        padding: 15px;
+        border-radius: 10px;
+        margin-bottom: 15px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    }
+    
+    .system-message {
+        background-color: #fff3cd;
+        border-left: 5px solid #faad14;
+        padding: 10px 15px;
+        border-radius: 10px;
+        margin-bottom: 15px;
+        font-size: 0.9em;
+    }
+    
+    /* Headers styling */
+    h1 {
+        color: #1890ff;
+        font-weight: 700;
+    }
+    
+    h2 {
+        color: #333;
+        font-weight: 600;
+        margin-top: 1.5rem;
+    }
+    
+    /* Tabs styling */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 2px;
+    }
+    
+    .stTabs [data-baseweb="tab"] {
+        height: 50px;
+        white-space: pre-wrap;
+        background-color: #f6f8fa;
+        border-radius: 5px 5px 0 0;
+        gap: 1px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+    }
+    
+    .stTabs [aria-selected="true"] {
+        background-color: #e6f7ff;
+        border-bottom: 2px solid #1890ff;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+st.title("🕵️ Multi-Agent Observability")
+st.caption("Powered by Semantic Kernel + App Insights")
 
 # Initialize session state for conversation history
 if 'conversation_history' not in st.session_state:
@@ -440,24 +518,100 @@ if 'app_initialized' not in st.session_state:
     sync_conversation_history_with_agents()
     st.session_state.app_initialized = True
 
-col_q, col_dash = st.columns([1,2])
+# Create tabs for Chat and Dashboard
+chat_tab, dashboard_tab = st.tabs(["💬 Chat Interface", "📊 Dashboard"])
 
-with col_q:
-    st.header("Ask the Agents")
+# CHAT INTERFACE TAB
+with chat_tab:
+    # Create two columns for chat history and input
+    chat_col, settings_col = st.columns([3, 1])
     
-    # Add a button to clear conversation history
-    col1, col2 = st.columns(2)
+    with chat_col:
+        # Chat container with custom styling
+        chat_container = st.container()
+        with chat_container:
+            st.markdown("### Conversation")
+            
+            # Display chat messages with improved styling
+            for message in st.session_state.conversation_history:
+                # Format timestamp
+                timestamp = message.metadata.get("timestamp", pd.Timestamp.utcnow())
+                time_str = timestamp.strftime("%H:%M:%S")
+
+                if message.role == AuthorRole.USER:
+                    st.markdown(f"""
+                    <div class="user-message">
+                        <div style='display: flex; justify-content: space-between;'>
+                            <strong>👤 You</strong>
+                            <span style='color: #666; font-size: 0.8em;'>{time_str}</span>
+                        </div>
+                        <div style='margin-top: 8px;'>{message.content}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                elif message.role == AuthorRole.ASSISTANT:
+                    agent_type = "Coordinator"
+                    icon = "🤖"
+                    if "agent_type" in message.metadata:
+                        agent_type = message.metadata["agent_type"]
+                        if agent_type == "Search":
+                            icon = "🔍"
+                        elif agent_type == "Calculator":
+                            icon = "🧮"
+                    
+                    tools_used = ""
+                    if "tools" in message.metadata and message.metadata["tools"]:
+                        tools_used = f" <span style='font-size: 0.9em; color: #666;'>(Tools: {', '.join(message.metadata['tools'])})</span>"
+
+                    st.markdown(f"""
+                    <div class="assistant-message">
+                        <div style='display: flex; justify-content: space-between;'>
+                            <strong>{icon} {agent_type} Agent{tools_used}</strong>
+                            <span style='color: #666; font-size: 0.8em;'>{time_str}</span>
+                        </div>
+                        <div style='margin-top: 8px;'>{message.content}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                elif message.role == AuthorRole.SYSTEM:
+                    st.markdown(f"""
+                    <div class="system-message">
+                        <div style='display: flex; justify-content: space-between;'>
+                            <strong>⚙️ System</strong>
+                            <span style='color: #666; font-size: 0.8em;'>{time_str}</span>
+                        </div>
+                        <div style='margin-top: 5px;'>{message.content}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+        
+        # Input area with improved styling
+        st.markdown("### Ask a Question")
+        user_input = st.text_area("Type your message here...", height=100, 
+                                  placeholder="Ask me anything...")
+        
+        # Submit button with better styling
+        submit_col, clear_col = st.columns([1, 1])
+        with submit_col:
+            submit_button = st.button("Send Message 📤", use_container_width=True, type="primary")
+        with clear_col:
+            if st.button("Clear Chat 🗑️", use_container_width=True):
+                st.session_state.conversation_history = []
+                # Reset agent message histories
+                st.session_state.search_agent_messages = []
+                st.session_state.calculator_agent_messages = []
+                st.session_state.coordinator_agent_messages = []
+                st.rerun()
     
-    with col1:
-        if st.button("Clear Conversation"):
-            st.session_state.conversation_history = []
-            # Reset agent message histories
-            st.session_state.search_agent_messages = []
-            st.session_state.calculator_agent_messages = []
-            st.session_state.coordinator_agent_messages = []
-            st.rerun()
-    
-    with col2:
+    with settings_col:
+        st.markdown("### Settings")
+        
+        # Agent selection with better UI
+        st.markdown("**Select Agent Type:**")
+        agent_options = ["Auto (Coordinator)", "Search Agent", "Calculator Agent"]
+        selected_agent = st.radio("", agent_options, index=0)
+        
+        # Export conversation option
+        st.markdown("**Conversation Actions:**")
         if st.session_state.conversation_history:
             # Convert conversation history to JSON
             conversation_json = json.dumps(
@@ -468,137 +622,95 @@ with col_q:
             
             # Create a download button
             st.download_button(
-                label="Export Conversation",
+                label="Export Conversation 💾",
                 data=conversation_json,
                 file_name="conversation_history.json",
-                mime="application/json"
+                mime="application/json",
+                use_container_width=True
             )
+        
+        # Display some info about the agents
+        st.markdown("---")
+        st.markdown("**Available Agents:**")
+        
+        st.markdown("""
+        - **🤖 Coordinator:** Manages routing between specialized agents
+        - **🔍 Search:** Specialized in web search tasks
+        - **🧮 Calculator:** Specialized in math calculations
+        """)
+        
+        # Add some usage tips
+        st.markdown("---")
+        st.markdown("**Tips:**")
+        st.markdown("""
+        - Use clear, specific questions
+        - Check the dashboard for performance metrics
+        - Try different agents for specialized tasks
+        """)
     
-    # Display conversation history
-    st.subheader("Conversation History")
-    
-    # Add filter options
-    conversation_container = st.container()
-    with conversation_container:
-        for message in st.session_state.conversation_history:
-            # Format timestamp
-            timestamp = message.metadata.get("timestamp", pd.Timestamp.utcnow())
-            time_str = timestamp.strftime("%H:%M:%S")
+    # Process form submission
+    if submit_button and user_input:  # Only proceed if there's input
+        # Add user message to conversation history
+        st.session_state.conversation_history.append(
+            ChatMessageContent(
+                role=AuthorRole.USER,
+                content=user_input,
+                metadata= {
+                    "timestamp": pd.Timestamp.utcnow()
+                }
+            )
+        )
 
-            if message.role == AuthorRole.USER:
-                st.markdown(f"""
-                <div style='background-color: #e6f7ff; padding: 10px; border-radius: 5px; margin-bottom: 10px;'>
-                    <div style='display: flex; justify-content: space-between;'>
-                        <strong>User:</strong>
-                        <span style='color: #666; font-size: 0.8em;'>{time_str}</span>
-                    </div>
-                    <div style='margin-top: 5px;'>{message.content}</div>
-                </div>
-                """, unsafe_allow_html=True)
-
-            elif message.role == AuthorRole.ASSISTANT:
-                agent_type = "Coordinator"
-                if "agent_type" in message.metadata:
-                    agent_type = message.metadata["agent_type"]
-
-                # Different background colors for different agent types
-                bg_color = "#f0f0f0"  # Default gray
-                if agent_type == "Search":
-                    bg_color = "#e6ffe6"  # Light green
-                elif agent_type == "Calculator":
-                    bg_color = "#e6e6ff"  # Light blue
-                
-                tools_used = ""
-                if "tools" in message.metadata and message.metadata["tools"]:
-                    tools_used = f" <span style='font-size: 0.9em; color: #666;'>(Tools: {', '.join(message.metadata['tools'])})</span>"
-
-                st.markdown(f"""
-                <div style='background-color: {bg_color}; padding: 10px; border-radius: 5px; margin-bottom: 10px;'>
-                    <div style='display: flex; justify-content: space-between;'>
-                        <strong>{agent_type} Agent{tools_used}</strong>
-                        <span style='color: #666; font-size: 0.8em;'>{time_str}</span>
-                    </div>
-                    <div style='margin-top: 5px;'>{message.content}</div>
-                </div>
-                """, unsafe_allow_html=True)
-
-            elif message.role == AuthorRole.SYSTEM:
-                st.markdown(f"""
-                <div style='background-color: #fff3cd; padding: 10px; border-radius: 5px; margin-bottom: 10px;'>
-                    <div style='display: flex; justify-content: space-between;'>
-                        <strong>System:</strong>
-                        <span style='color: #666; font-size: 0.8em;'>{time_str}</span>
-                    </div>
-                    <div style='margin-top: 5px;'>{message.content}</div>
-                </div>
-                """, unsafe_allow_html=True)
-    
-    # Input area
-    user_input = st.text_area("Your question:", height=120)
-    
-    # Agent selection
-    agent_options = ["Auto (Coordinator)", "Search Agent", "Calculator Agent"]
-    selected_agent = st.radio("Select Agent:", agent_options)
-    
-    if st.button("Submit"):
-        if user_input:  # Only proceed if there's input
-            # Add user message to conversation history
+        # Sync conversation history with agent chat histories
+        sync_conversation_history_with_agents()
+        
+        with st.spinner("🧠 Agents are thinking..."):
+            rec = query_agent(user_input, selected_agent)
+            
+            # Determine agent type for the response
+            agent_type = "Coordinator"
+            if len(rec["tools"]) == 1:
+                if rec["tools"][0] == "web_search":
+                    agent_type = "Search"
+                elif rec["tools"][0] == "calculator":
+                    agent_type = "Calculator"
+            
+            # Add assistant response to conversation history
             st.session_state.conversation_history.append(
                 ChatMessageContent(
-                    role=AuthorRole.USER,
-                    content=user_input,
-                    metadata= {
-                        "timestamp": pd.Timestamp.utcnow()
+                    role=AuthorRole.ASSISTANT,
+                    content=rec["answer"],
+                    metadata={
+                        "user": rec["user"],
+                        "tokens": rec["tokens"],
+                        "agent_type": agent_type,
+                        "tools": rec["tools"],
+                        "timestamp": pd.Timestamp.utcnow(),
+                        "latency": rec["latency"],
                     }
                 )
             )
 
-            # Sync conversation history with agent chat histories
-            sync_conversation_history_with_agents()
-            
-            with st.spinner("Agents working..."):
-                rec = query_agent(user_input, selected_agent)
-                
-                # Determine agent type for the response
-                agent_type = "Coordinator"
-                if len(rec["tools"]) == 1:
-                    if rec["tools"][0] == "web_search":
-                        agent_type = "Search"
-                    elif rec["tools"][0] == "calculator":
-                        agent_type = "Calculator"
-                
-                # Add assistant response to conversation history
-                st.session_state.conversation_history.append(
-                    ChatMessageContent(
-                        role=AuthorRole.ASSISTANT,
-                        content=rec["answer"],
-                        metadata={
-                            "user": rec["user"],
-                            "tokens": rec["tokens"],
-                            "agent_type": agent_type,
-                            "tools": rec["tools"],
-                            "timestamp": pd.Timestamp.utcnow(),
-                            "latency": rec["latency"],
-                        }
-                    )
+            # Add system message about performance metrics
+            st.session_state.conversation_history.append(
+                ChatMessageContent(
+                    role=AuthorRole.SYSTEM,
+                    content=f"Response generated in {rec['latency']:.2f}s using {len(rec['tools'])} tool{'s' if len(rec['tools']) > 1 else ''}{': ' + ', '.join(rec['tools']) if rec['tools'] else ''}",
+                    metadata={
+                        "metrics": {
+                            "latency": rec['latency'],
+                            "tools_count": len(rec['tools'])
+                        },
+                        "timestamp": pd.Timestamp.utcnow()
+                    }
                 )
+            )
+        
+        # Rerun to refresh the UI
+        st.rerun()
 
-                # Add system message about performance metrics
-                st.session_state.conversation_history.append(
-                    ChatMessageContent(
-                        role=AuthorRole.SYSTEM,
-                        content=f"Response generated in {rec['latency']:.2f}s using {len(rec['tools'])} tool{'s' if len(rec['tools']) > 1 else ''}{': ' + ', '.join(rec['tools']) if rec['tools'] else ''}",
-                        metadata={
-                            "metrics": {
-                                "latency": rec['latency'],
-                                "tools_count": len(rec['tools'])
-                            },
-                            "timestamp": pd.Timestamp.utcnow()
-                        }
-                    )
-                )
-
-with col_dash:
+# DASHBOARD TAB
+with dashboard_tab:
     st.header("📊 Live Dashboard")
     
     # Add conversation statistics section if there's conversation history
@@ -647,52 +759,247 @@ with col_dash:
             tools_df = pd.DataFrame(pd.Series(tools_used).value_counts()).reset_index().rename(columns={"index": "Tool", 0: "Count"})
             st.bar_chart(tools_df.set_index("Tool"))
     
+    # Historical Data Dashboard
+    st.markdown("---")
+    st.subheader("📈 Historical Performance")
+    
+    # Time range selection
+    hours_options = [1, 2, 6, 12, 24]
+    selected_hours = st.select_slider("Time Range (hours)", options=hours_options, value=2)
+    
     # Load historical data
-    df = fetch_history(hours=2)
+    df = fetch_history(hours=selected_hours)
     if df.empty:
-        st.info("No interactions in the last 2 hours.")
+        st.info(f"No interactions in the last {selected_hours} hour{'s' if selected_hours > 1 else ''}.")
     else:
-        # KPIs
-        avg_lat   = df.latency.mean()
-        p95_lat   = df.latency.quantile(0.95)
-        avg_tok   = df.tokens.mean() if 'tokens' in df.columns and not df.tokens.empty else 0
-        tot_q     = len(df)
+        # Create dashboard layout
+        metrics_col1, metrics_col2 = st.columns(2)
         
-        c1,c2,c3 = st.columns(3)
-        c1.metric("Avg Latency", f"{avg_lat:.2f}s", f"p95 {p95_lat:.2f}s")
-        c2.metric("Avg Tokens", f"{avg_tok:.0f}")
-        c3.metric("Total Queries", tot_q)
-
-        # trends
-        st.subheader("Latency Over Time")
-        latency_df = df.copy()
-        if "TimeGenerated" in latency_df.columns:
-            st.line_chart(latency_df.set_index("TimeGenerated")[["latency"]])
-        elif "timestamp" in latency_df.columns:
-            st.line_chart(latency_df.set_index("timestamp")[["latency"]])
-
-        # Tool usage
-        st.subheader("Tool Usage")
-        all_tools = []
-        for tools_list in df.tools:
-            if isinstance(tools_list, list):
-                all_tools.extend(tools_list)
-            elif isinstance(tools_list, str):
-                # Handle case where tools might be a comma-separated string
-                all_tools.extend([t.strip() for t in tools_list.split(',')])
+        with metrics_col1:
+            # KPIs
+            avg_lat = df.latency.mean()
+            p95_lat = df.latency.quantile(0.95)
+            avg_tok = df.tokens.mean() if 'tokens' in df.columns and not df.tokens.empty else 0
+            tot_q = len(df)
+            
+            c1, c2 = st.columns(2)
+            c1.metric("Avg Latency", f"{avg_lat:.2f}s", f"p95 {p95_lat:.2f}s")
+            c2.metric("Total Queries", tot_q)
+            
+            # Latency trends with SLI/SLO
+            st.subheader("Latency Over Time (SLI)")
+            
+            # Add SLO configuration
+            slo_container = st.container()
+            with slo_container:
+                slo_col1, slo_col2 = st.columns([3, 1])
+                with slo_col1:
+                    st.caption("Service Level Objective (SLO) Configuration")
+                with slo_col2:
+                    slo_target = st.number_input("Target Latency (s)", 
+                                                 min_value=0.1, 
+                                                 max_value=10.0, 
+                                                 value=2.0, 
+                                                 step=0.1,
+                                                 help="Target response time in seconds")
+            
+            # Prepare latency data with SLI/SLO indicators
+            latency_df = df.copy()
+            
+            # Create a visualization of latency with SLO target line
+            if "TimeGenerated" in latency_df.columns or "timestamp" in latency_df.columns:
+                import altair as alt
+                
+                # Determine which timestamp column to use
+                time_col = "timestamp" if "timestamp" in latency_df.columns else "TimeGenerated"
+                
+                # Calculate SLI compliance (percentage of requests meeting SLO)
+                sli_compliance = (latency_df["latency"] <= slo_target).mean() * 100
+                
+                # Create base chart for latency values
+                base = alt.Chart(latency_df).encode(
+                    x=alt.X(f'{time_col}:T', title='Time'),
+                    y=alt.Y('latency:Q', title='Latency (seconds)')
+                )
+                
+                # Create the line chart for latency
+                line = base.mark_line(color='#1890ff').encode(
+                    tooltip=[
+                        alt.Tooltip(f'{time_col}:T', title='Time'),
+                        alt.Tooltip('latency:Q', title='Latency (s)')
+                    ]
+                )
+                
+                # Add points to highlight violations
+                violations = base.transform_filter(
+                    alt.datum.latency > slo_target
+                ).mark_point(color='red', size=100).encode(
+                    tooltip=[
+                        alt.Tooltip(f'{time_col}:T', title='Time'),
+                        alt.Tooltip('latency:Q', title='Latency (s)'),
+                        alt.Tooltip('user:N', title='Query')
+                    ]
+                )
+                
+                # Add SLO target line
+                target_line = alt.Chart(
+                    pd.DataFrame({'threshold': [slo_target]})
+                ).mark_rule(color='red', strokeDash=[3, 3]).encode(
+                    y='threshold:Q'
+                )
+                
+                # Combine charts
+                chart = alt.layer(line, violations, target_line).properties(
+                    height=250
+                ).interactive()
+                
+                # Display the chart
+                st.altair_chart(chart, use_container_width=True)
+                
+                # Display SLI compliance metric
+                st.metric(
+                    "SLI Compliance", 
+                    f"{sli_compliance:.1f}%", 
+                    f"{sli_compliance - 95:.1f}%" if sli_compliance != 95 else "On target",
+                    help="Percentage of requests meeting the SLO target latency"
+                )
         
-        tool_counts = pd.Series(all_tools).value_counts()
-        if not tool_counts.empty:
-            st.bar_chart(tool_counts)
-        else:
-            st.info("No tool usage data available.")
+        with metrics_col2:
+            c1, c2 = st.columns(2)
+            c1.metric("Avg Tokens", f"{avg_tok:.0f}")
+            c2.metric("Unique Queries", df['user'].nunique() if 'user' in df.columns else "N/A")
+            
+            # Tool usage
+            st.subheader("Tool Usage")
+            all_tools = []
+            for tools_list in df.tools:
+                if isinstance(tools_list, list):
+                    all_tools.extend(tools_list)
+                elif isinstance(tools_list, str):
+                    # Handle case where tools might be a comma-separated string
+                    all_tools.extend([t.strip() for t in tools_list.split(',')])
+            
+            tool_counts = pd.Series(all_tools).value_counts()
+            if not tool_counts.empty:
+                st.bar_chart(tool_counts)
+            else:
+                st.info("No tool usage data available.")
 
+        # Recent interactions table
         st.subheader("Recent Interactions")
         display_cols = ["timestamp", "user", "latency", "tools"]
         display_cols = [col for col in display_cols if col in df.columns]
         
         st.dataframe(
             df[display_cols],
-            height=200,
+            height=300,
             use_container_width=True
         )
+    
+    # SLI/SLO Summary Section
+    st.markdown("---")
+    st.subheader("📏 Service Level Indicators (SLI) Summary")
+
+    # Create summary layout
+    sli_summary_cols = st.columns(2)
+
+    with sli_summary_cols[0]:
+        st.markdown("""
+        ### Performance Metrics
+        
+        The following Service Level Indicators (SLIs) are being tracked:
+        
+        - **Latency**: Response time in seconds
+        - **Token Usage**: Number of tokens used per request
+        - **Tool Usage**: Distribution of tool types used
+        
+        The main Service Level Objective (SLO) is focused on latency.
+        """)
+        
+        if not df.empty:
+            # Calculate SLO achievement over time periods
+            last_hour_data = df[df['timestamp'] > pd.Timedelta(hours=1)] if 'timestamp' in df.columns else pd.DataFrame()
+            
+            # Create summary metrics
+            st.markdown("### Time-based Compliance")
+            time_cols = st.columns(3)
+            
+            # Last hour
+            if not last_hour_data.empty:
+                last_hour_compliance = (last_hour_data['latency'] <= slo_target).mean() * 100
+                time_cols[0].metric(
+                    "Last Hour", 
+                    f"{last_hour_compliance:.1f}%",
+                    help="Percentage of requests in the last hour meeting the SLO"
+                )
+            else:
+                time_cols[0].metric("Last Hour", "N/A", help="No data available for the last hour")
+                
+            # All time in current view
+            all_time_compliance = (df['latency'] <= slo_target).mean() * 100
+            time_cols[1].metric(
+                f"Last {selected_hours}h", 
+                f"{all_time_compliance:.1f}%",
+                help=f"Percentage of requests in the last {selected_hours} hours meeting the SLO"
+            )
+            
+            # Display error budget
+            error_budget = 5.0  # 95% target means 5% error budget
+            error_budget_used = 100 - all_time_compliance
+            error_budget_remaining = error_budget - error_budget_used if error_budget_used <= error_budget else 0
+            
+            time_cols[2].metric(
+                "Error Budget Remaining", 
+                f"{error_budget_remaining:.1f}%",
+                help=f"Remaining error budget (target is {100-error_budget}% compliance)"
+            )
+
+    with sli_summary_cols[1]:
+        st.markdown("""
+        ### SLO Definitions
+        
+        **Service Level Objective (SLO)**: Target level of reliability for the service.
+        
+        **Current SLO Targets**:
+        - Latency: Responses should complete within target seconds
+        - Reliability: 95% of requests should meet the latency target
+        
+        **Error Budget**: 5% of requests can exceed the latency target while still meeting the SLO.
+        """)
+        
+        # Add a latency distribution chart if we have data
+        if not df.empty:
+            st.markdown("### Latency Distribution")
+            
+            # Create histogram for latency distribution
+            import altair as alt
+            
+            # Calculate latency buckets
+            hist_data = pd.DataFrame({
+                'latency': df['latency'],
+                'meets_slo': df['latency'] <= slo_target
+            })
+            
+            latency_hist = alt.Chart(hist_data).mark_bar().encode(
+                alt.X('latency:Q', bin=alt.Bin(maxbins=20), title='Latency (seconds)'),
+                alt.Y('count()', title='Number of Requests'),
+                alt.Color('meets_slo:N', 
+                          scale=alt.Scale(domain=[True, False], range=['#52c41a', '#f5222d']),
+                          legend=alt.Legend(title="Meets SLO"))
+            ).properties(height=200)
+            
+            # Add a rule for the SLO target
+            rule = alt.Chart(pd.DataFrame({'slo': [slo_target]})).mark_rule(
+                color='red', 
+                strokeDash=[3, 3]
+            ).encode(x='slo:Q')
+            
+            # Display chart
+            st.altair_chart(latency_hist + rule, use_container_width=True)
+    
+    # Add SLI/SLO explanation at the top
+    st.info("""
+    **Service Level Indicators (SLI)** measure the performance of our AI agent service, while 
+    **Service Level Objectives (SLO)** define our targets for those metrics. 
+    The primary SLI is **latency** (response time), with a target SLO shown in the charts below.
+    """)
