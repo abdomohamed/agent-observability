@@ -275,9 +275,9 @@ def fetch_history(hours: int = 1) -> pd.DataFrame:
     | extend 
         latency = todouble(todynamic(Measurements).latency),
         tokens  = toint(todynamic(Measurements).tokens),
-        tools   = tostring(todynamic(Properties).tools),
+        agents   = tostring(todynamic(Properties).tools),
         user    = tostring(todynamic(Properties).user)
-    | project Name, TimeGenerated, user, latency, tokens, tools
+    | project Name, TimeGenerated, user, latency, tokens, agents
     | order by TimeGenerated desc
     """
 
@@ -768,25 +768,27 @@ with dashboard_tab:
             c1.metric("Avg Tokens", f"{avg_tok:.0f}")
             c2.metric("Unique Queries", df['user'].nunique() if 'user' in df.columns else "N/A")
             
-            # Tool usage
-            st.subheader("Tool Usage")
+            # Agent Usage
+            st.subheader("Agent Usage")
             all_tools = []
-            for tools_list in df.tools:
-                if isinstance(tools_list, list):
-                    all_tools.extend(tools_list)
-                elif isinstance(tools_list, str):
-                    # Handle case where tools might be a comma-separated string
-                    all_tools.extend([t.strip() for t in tools_list.split(',')])
-            
+            for agents_list in df.agents:
+                if agents_list is None or agents_list == "":
+                    agents_list = ["coordinator_agent"]
+                if isinstance(agents_list, list):
+                    all_tools.extend(agents_list)
+                elif isinstance(agents_list, str):
+                    # Handle case where agents might be a comma-separated string
+                    all_tools.extend([t.strip() for t in agents_list.split(',')])
+
             tool_counts = pd.Series(all_tools).value_counts()
             if not tool_counts.empty:
                 st.bar_chart(tool_counts)
             else:
-                st.info("No tool usage data available.")
+                st.info("No agent usage data available.")
 
         # Recent interactions table
         st.subheader("Recent Interactions")
-        display_cols = ["timestamp", "user", "latency", "tools", "tokens"]
+        display_cols = ["timestamp", "user", "latency", "agents", "tokens"]
         display_cols = [col for col in display_cols if col in df.columns]
         
         st.dataframe(
@@ -810,8 +812,8 @@ with dashboard_tab:
         
         - **Latency**: Response time in seconds
         - **Token Usage**: Number of tokens used per request
-        - **Tool Usage**: Distribution of tool types used
-        
+        - **Agent Usage**: Distribution of agent types used
+
         The main Service Level Objective (SLO) is focused on latency.
         """)
         
@@ -943,30 +945,32 @@ with diagnostics_tab:
                         st.plotly_chart(fig, use_container_width=True)
                 
                 with viz_col2:
-                    # Tool usage pie chart
-                    st.markdown("#### Tool Usage Distribution")
-                    all_tools = []
-                    for tools_list in df_diagnostics.tools:
-                        if isinstance(tools_list, list):
-                            all_tools.extend(tools_list)
-                        elif isinstance(tools_list, str):
-                            # Handle case where tools might be a comma-separated string
-                            all_tools.extend([t.strip() for t in tools_list.split(',')])
-                    
-                    tool_counts = pd.Series(all_tools).value_counts().reset_index()
-                    tool_counts.columns = ['Tool', 'Count']
-                    
+                    # agent usage pie chart
+                    st.markdown("#### Agent Usage Distribution")
+                    all_agents = []
+                    for agents_list in df_diagnostics.agents:
+                        if agents_list is None or agents_list == "":
+                            agents_list = ["coordinator_agent"]
+                        if isinstance(agents_list, list):
+                            all_agents.extend(agents_list)
+                        elif isinstance(agents_list, str):
+                            # Handle case where agents might be a comma-separated string
+                            all_agents.extend([t.strip() for t in agents_list.split(',')])
+
+                    agent_counts = pd.Series(all_agents).value_counts().reset_index()
+                    agent_counts.columns = ['Agent', 'Count']
+
                     if not tool_counts.empty:
                         fig = px.pie(
-                            tool_counts, 
-                            values='Count', 
-                            names='Tool',
-                            title="Tool Usage Distribution",
+                            agent_counts, 
+                            values='Count',
+                            names='Agent',
+                            title="Agent Usage Distribution",
                             hole=0.4
                         )
                         st.plotly_chart(fig, use_container_width=True)
                     else:
-                        st.info("No tool usage data available.")
+                        st.info("No agent usage data available.")
                 
                 # Time series analysis
                 st.subheader("Temporal Analysis")
@@ -1025,7 +1029,7 @@ with diagnostics_tab:
                 - Average latency: {summary_data['avg_latency']:.2f}s
                 - P95 latency: {summary_data['p95_latency']:.2f}s
                 - Maximum latency: {summary_data['max_latency']:.2f}s
-                - Tool usage distribution: {summary_data['tool_distribution']}
+                - Agent usage distribution: {summary_data['tool_distribution']}
 
                 Here's a sample of the transaction logs (up to 40 records):
                 ```
@@ -1040,7 +1044,7 @@ with diagnostics_tab:
                 Additional metrics:
                 - Number of unique queries: {df_diagnostics['user'].nunique() if 'user' in df_diagnostics.columns else 'N/A'}
                 - High-latency transactions (>3s): {(df_diagnostics['latency'] > 3).sum() if 'latency' in df_diagnostics.columns else 0} ({(df_diagnostics['latency'] > 3).mean() * 100:.1f}% of total)
-                - Tools used per transaction: {sum(len(t) if isinstance(t, list) else len(t.split(',')) if isinstance(t, str) else 0 for t in df_diagnostics.tools) / len(df_diagnostics):.2f} avg
+                - Tools used per transaction: {sum(len(t) if isinstance(t, list) else len(t.split(',')) if isinstance(t, str) else 0 for t in df_diagnostics.agents) / len(df_diagnostics):.2f} avg
 
                 Please analyze the logs for potential performance issues by:
 
@@ -1050,7 +1054,7 @@ with diagnostics_tab:
 
                 2. Analyzing correlations between:
                    - Query complexity and latency
-                   - Tool usage and latency (e.g., web_search vs. calculator vs. no tools)
+                   - Agent usage and latency (e.g., web_search vs. calculator vs. no sub-agent)
                    - Query length/type and latency
                    - Time of day and performance
 
@@ -1120,7 +1124,7 @@ with diagnostics_tab:
         
         This tab provides advanced analytics on your agent interactions:
         
-        - **Transaction Analysis**: Visualize response times and tool usage patterns
+        - **Transaction Analysis**: Visualize response times and agent usage patterns
         - **Temporal Analysis**: See how traffic and performance vary over time
         - **AI-Powered Insights**: Get intelligent analysis of system behavior
         
