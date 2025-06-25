@@ -610,56 +610,56 @@ with chat_tab:
 
 # DASHBOARD TAB
 with dashboard_tab:
-    st.header("📊 Live Dashboard")
+    # st.header("📊 Live Dashboard")
     
     # Add conversation statistics section if there's conversation history
-    if st.session_state.conversation_history:
-        st.subheader("Current Conversation Stats")
+    # if st.session_state.conversation_history:
+    #     st.subheader("Current Conversation Stats")
         
-        # Count message types
-        user_messages = sum(1 for msg in st.session_state.conversation_history if msg.role == AuthorRole.USER)
-        assistant_messages = sum(1 for msg in st.session_state.conversation_history if msg.role == AuthorRole.ASSISTANT)
-        system_messages = sum(1 for msg in st.session_state.conversation_history if msg.role == AuthorRole.SYSTEM)
+    #     # Count message types
+    #     user_messages = sum(1 for msg in st.session_state.conversation_history if msg.role == AuthorRole.USER)
+    #     assistant_messages = sum(1 for msg in st.session_state.conversation_history if msg.role == AuthorRole.ASSISTANT)
+    #     system_messages = sum(1 for msg in st.session_state.conversation_history if msg.role == AuthorRole.SYSTEM)
 
-        # Calculate metrics from the conversation
-        agent_types = {}
-        tools_used = []
-        total_latency = 0
-        latency_count = 0
+    #     # Calculate metrics from the conversation
+    #     agent_types = {}
+    #     tools_used = []
+    #     total_latency = 0
+    #     latency_count = 0
         
-        for msg in st.session_state.conversation_history:
-            if msg.role == AuthorRole.ASSISTANT and "agent_type" in msg.metadata:
-                agent_type = msg.metadata.get("agent_type", "Coordinator")
-                agent_types[agent_type] = agent_types.get(agent_type, 0) + 1
+    #     for msg in st.session_state.conversation_history:
+    #         if msg.role == AuthorRole.ASSISTANT and "agent_type" in msg.metadata:
+    #             agent_type = msg.metadata.get("agent_type", "Coordinator")
+    #             agent_types[agent_type] = agent_types.get(agent_type, 0) + 1
 
-                if "tools" in msg.metadata and msg.metadata["tools"]:
-                    tools_used.extend(msg.metadata["tools"])
+    #             if "tools" in msg.metadata and msg.metadata["tools"]:
+    #                 tools_used.extend(msg.metadata["tools"])
 
-            if msg.role == AuthorRole.SYSTEM and "metrics" in msg.metadata and "latency" in msg.metadata["metrics"]:
-                total_latency += msg.metadata["metrics"]["latency"]
-                latency_count += 1
+    #         if msg.role == AuthorRole.SYSTEM and "metrics" in msg.metadata and "latency" in msg.metadata["metrics"]:
+    #             total_latency += msg.metadata["metrics"]["latency"]
+    #             latency_count += 1
         
-        # Display conversation stats
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("User Messages", user_messages)
-        c2.metric("Assistant Responses", assistant_messages)
-        c3.metric("System Messages", system_messages)
-        c4.metric("Avg Response Time", f"{total_latency/latency_count:.2f}s" if latency_count > 0 else "N/A")
+    #     # Display conversation stats
+    #     c1, c2, c3, c4 = st.columns(4)
+    #     c1.metric("User Messages", user_messages)
+    #     c2.metric("Assistant Responses", assistant_messages)
+    #     c3.metric("System Messages", system_messages)
+    #     c4.metric("Avg Response Time", f"{total_latency/latency_count:.2f}s" if latency_count > 0 else "N/A")
         
-        # Show agent type distribution
-        if agent_types:
-            st.subheader("Agent Type Distribution")
-            agent_df = pd.DataFrame({"Count": agent_types}).reset_index().rename(columns={"index": "Agent Type"})
-            st.bar_chart(agent_df.set_index("Agent Type"))
+    #     # Show agent type distribution
+    #     if agent_types:
+    #         st.subheader("Agent Type Distribution")
+    #         agent_df = pd.DataFrame({"Count": agent_types}).reset_index().rename(columns={"index": "Agent Type"})
+    #         st.bar_chart(agent_df.set_index("Agent Type"))
         
-        # Show tools usage in current conversation
-        if tools_used:
-            st.subheader("Tools Used in Current Conversation")
-            tools_df = pd.DataFrame(pd.Series(tools_used).value_counts()).reset_index().rename(columns={"index": "Tool", 0: "Count"})
-            st.bar_chart(tools_df.set_index("Tool"))
+    #     # Show tools usage in current conversation
+    #     if tools_used:
+    #         st.subheader("Tools Used in Current Conversation")
+    #         tools_df = pd.DataFrame(pd.Series(tools_used).value_counts()).reset_index().rename(columns={"index": "Tool", 0: "Count"})
+    #         st.bar_chart(tools_df.set_index("Tool"))
     
-    # Historical Data Dashboard
-    st.markdown("---")
+    # # Historical Data Dashboard
+    # st.markdown("---")
     st.subheader("📈 Historical Performance")
     
     # Time range selection
