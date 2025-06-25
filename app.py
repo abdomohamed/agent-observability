@@ -11,6 +11,7 @@ import streamlit as st
 import os
 import plotly.express as px
 from io import BytesIO
+from semantic_kernel.agents.runtime import InProcessRuntime
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Azure AI Agents and Semantic Kernel imports
@@ -20,9 +21,12 @@ from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion
 from semantic_kernel.functions import kernel_function, KernelArguments
 from semantic_kernel.contents import ChatHistory
 from semantic_kernel.connectors.ai.open_ai import OpenAIChatPromptExecutionSettings
+from semantic_kernel.connectors.ai import FunctionChoiceBehavior
 
 # Azure AI Agents imports
-from semantic_kernel.agents import ChatCompletionAgent
+from semantic_kernel.agents import ChatCompletionAgent, AzureAIAgentSettings, AzureAIAgent, GroupChatOrchestration
+from azure.ai.agents.models import BingGroundingTool
+
 from azure.core.credentials import AzureKeyCredential
 from openai import AzureOpenAI
 
@@ -34,6 +38,12 @@ from semantic_kernel.connectors.ai.open_ai.services.azure_chat_completion import
 )
 from semantic_kernel.contents import FunctionCallContent, FunctionResultContent, AuthorRole
 from semantic_kernel.contents.chat_message_content import ChatMessageContent
+
+
+
+from agents.agents_factor import create_calculator_agent, create_coordinator_agent, create_search_agent, get_agents
+from agents.group_chat_manager import ChatCompletionGroupChatManager
+from agents.plugins import CalculatorPlugin, SearchPlugin
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Azure OpenAI Configuration
@@ -51,23 +61,13 @@ client = AzureOpenAI(
     api_key=subscription_key
 )
 
-# Initialize Semantic Kernel
-kernel = sk.Kernel()
-kernel.add_service(
-    AzureChatCompletion(
-        deployment_name=deployment,
-        endpoint=endpoint,
-        api_key=subscription_key,
-        api_version="2024-12-01-preview",
-        service_id="AzureOpenAI",
-    )
-)
-
 # ──────────────────────────────────────────────────────────────────────────────
 # App Insights telemetry
 # ──────────────────────────────────────────────────────────────────────────────
 from applicationinsights import TelemetryClient
 tc = TelemetryClient(st.secrets["APP_INSIGHTS"]["INSTRUMENTATION_KEY"])
+
+from semantic_kernel.agents import AzureAIAgent
 
 def track_to_app_insights(rec: dict):
     tc.track_event(
@@ -93,112 +93,30 @@ credential    = DefaultAzureCredential()
 la_client     = LogsQueryClient(credential)
 WORKSPACE_ID  = st.secrets["AZURE"]["WORKSPACE_ID"]
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Tool definitions and agent setup
-# ──────────────────────────────────────────────────────────────────────────────
-
-class BasePlugin():
-    """ A base class for defining function plugins that can be used by agents.
-    """
-
-    def call_tool(self, tool_name: str, prompt: str) -> str:
-        time.sleep(0.4)
-        return f"[{tool_name} result for '{prompt}']\n"
-
-    # Define tools using the Azure AI Agents SDK
-class SearchPlugin(BasePlugin):
-    """ A plugin for web search functionality. """
-    
-    @kernel_function(description="Search the web for information")
-    async def web_search(self, query: str) -> str:
-        """
-        Search the web for information.
-        
-        Args:
-            query: The search query
-            
-        Returns:
-            Search results
-        """
-        return self.call_tool("web_search", query)
-
-
-class CalculatorPlugin(BasePlugin):
-    @kernel_function(description="Provide web search capabilities")
-    async def web_search(self, query: str) -> str:
-        """
-        Search the web for information.
-        
-        Args:
-            query: The search query
-                
-        Returns:
-            Search results
-        """
-        return self.call_tool("web_search", query)
-
-# Create agents with different tools and system prompts
-
-settings = AzureChatPromptExecutionSettings(service_id="AzureOpenAI")
-
-def create_search_agent():
-    agent = ChatCompletionAgent(
-        kernel=kernel,
-        name="search_agent",
-        instructions="You are a specialized agent that searches the web for information. Use the web_search function when the user asks for information that might be found online.",
-        plugins=[SearchPlugin()],
-        arguments=KernelArguments(settings=settings),
-    )
-    return agent
-
-def create_calculator_agent():
-    agent = ChatCompletionAgent(
-        kernel=kernel,
-        name="calculator_agent",
-        instructions="You are a specialized agent that performs calculations. Use the calculator function when the user asks for any mathematical operations.",
-        plugins=[CalculatorPlugin()],
-        arguments=KernelArguments(settings=settings),
-    )
-     
-    return agent
-
-def create_coordinator_agent():
-    agent  = AgentGroupChat(
-        agents=[create_search_agent(), create_calculator_agent()],
-        termination_strategy=None,  # Use default termination strategy
-    )
-    
-#     agent = ChatCompletionAgent(
-#         kernel=kernel,
-#         name="coordinator_agent",
-#         instructions="""You are a coordinator agent that determines which specialized agent to use based on the user's question.
-# Your job is to:
-# 1. Analyze the user's request
-# 2. Decide which tool the request: search agent, calculator agent, or both
-# 3. Synthesize responses from multiple agents if needed
-# 4. Provide a clear, helpful response to the user""",
-#         plugins=[SearchPlugin(), CalculatorPlugin()],
-#         arguments=KernelArguments(settings=settings),
-#     )
-    return agent
-
 # Initialize agents
-search_agent = None
-calculator_agent = None
-coordinator_agent = None
+search_agent: AzureAIAgent = None
+calculator_agent: ChatCompletionAgent = None
+coordinator_agent: GroupChatOrchestration = None
+runtime: InProcessRuntime = None
+used_tools: list = []
 
-def initialize_agents():
+async def initialize_agents():
     """Initialize the agents if they haven't been created yet"""
-    global search_agent, calculator_agent, coordinator_agent
+    global search_agent, calculator_agent, coordinator_agent, runtime, used_tools
     
     if search_agent is None:
-        search_agent = create_search_agent()
-    
+        search_agent = await create_search_agent()
+
     if calculator_agent is None:
-        calculator_agent = create_calculator_agent()
-    
+        calculator_agent = await create_calculator_agent()
+
     if coordinator_agent is None:
-        coordinator_agent = create_coordinator_agent()
+        coordinator_agent = await create_coordinator_agent(callback=agent_response_callback)
+    
+    used_tools = []
+        
+    runtime = InProcessRuntime()
+    runtime.start()
 
 # Keep conversation histories separate for each agent
 if 'search_agent_messages' not in st.session_state:
@@ -213,7 +131,15 @@ if 'coordinator_agent_messages' not in st.session_state:
 # ──────────────────────────────────────────────────────────────────────────────
 # Agent invocation
 # ──────────────────────────────────────────────────────────────────────────────
+
+def agent_response_callback(message: ChatMessageContent) -> None:
+    used_tools.append(message.name)
+    print(f"Agent response callback: {message.content} (Tool: {message.name})")
+    print(f"Used tools so far: {used_tools}")
+
 async def query_agent_with_sk(user_message: str, selected_agent="auto") -> dict:
+    global used_tools
+    
     start = time.time()
     used_tools = []
     answer = ""
@@ -221,50 +147,39 @@ async def query_agent_with_sk(user_message: str, selected_agent="auto") -> dict:
     metadata = {"user_message": user_message, "selected_agent": selected_agent, "timestamp": pd.Timestamp.utcnow()}
     
     # Initialize agents if needed
-    initialize_agents()
-    
-    # Determine which tools might be needed based on message content
-    if "search" in user_message.lower():
-        used_tools.append("web_search")
-    if "calc" in user_message.lower():
-        used_tools.append("calculator")
-    
-    # Force specific agent if selected
-    if selected_agent == "Search Agent":
-        used_tools = ["web_search"]
-    elif selected_agent == "Calculator Agent":
-        used_tools = ["calculator"]
+    await initialize_agents()
     
     # Use multi-agent approach if auto selected and multiple tools needed
-    if selected_agent == "Auto (Coordinator)" and len(used_tools) > 1:
+    if selected_agent == "Auto (Coordinator)":
         # Use coordinator agent with its history
         messages = st.session_state.coordinator_agent_messages.copy()
         messages.append(ChatMessageContent(role=AuthorRole.USER, content=user_message, metadata=metadata))
 
-        agent_response = await coordinator_agent.get_response(
-            messages=messages,
-            temperature=0.5,
-            max_tokens=500
-        )
+        # await coordinator_agent.add_chat_message(message=ChatMessageContent(role=AuthorRole.USER, content=user_message, metadata=metadata))
         
+        orchestration_result = await coordinator_agent.invoke(
+            task=messages,
+            runtime=runtime,
+        )
+
+        response = await orchestration_result.get()
+        
+        agent_response = response
         # Update the message history
         st.session_state.coordinator_agent_messages = messages.copy()
         st.session_state.coordinator_agent_messages.append(
-            ChatMessageContent(role=AuthorRole.ASSISTANT, content=agent_response.message.content, metadata=metadata)
+            ChatMessageContent(role=AuthorRole.ASSISTANT, content=agent_response.content, metadata=metadata)
         )
+
+        answer = agent_response.content
+        # used_tools = []
         
-        answer = agent_response.message.content
+        print(f"Agent response: {agent_response.content}")
         
         # Extract token usage if available
         if hasattr(agent_response, 'metadata') and 'usage' in agent_response.metadata:
             tokens = agent_response.metadata["usage"].completion_tokens or 0
             
-        # Extract tool usage
-        for tool_call in agent_response.message.tool_calls or []:
-            tool_name = tool_call.function.name
-            if tool_name not in used_tools:
-                used_tools.append(tool_name)
-        
     else:
         # Use a single agent if only one tool is needed or specific agent selected
         if "web_search" in used_tools or selected_agent == "Search Agent":
@@ -316,27 +231,6 @@ async def query_agent_with_sk(user_message: str, selected_agent="auto") -> dict:
             # Extract token usage if available
             if hasattr(agent_response, 'metadata') and 'usage' in agent_response.metadata:
                 tokens = agent_response.metadata["usage"].completion_tokens or 0
-                
-        else:
-            # Use the coordinator as a general assistant if no specific tools needed
-            messages = st.session_state.coordinator_agent_messages.copy()
-            messages.append(ChatMessageContent(role=AuthorRole.USER, content=user_message, metadata=metadata))
-
-            await coordinator_agent.add_chat_message(message=ChatMessageContent(role=AuthorRole.USER, content=user_message, metadata=metadata))
-            async for response in coordinator_agent.invoke():
-                agent_response = response
-                # Update the message history
-                st.session_state.coordinator_agent_messages = messages.copy()
-                st.session_state.coordinator_agent_messages.append(
-                    ChatMessageContent(role=AuthorRole.ASSISTANT, content=agent_response.content, metadata=metadata)
-                )
-
-                answer = agent_response.content
-                used_tools = []
-                
-                # Extract token usage if available
-                if hasattr(agent_response, 'metadata') and 'usage' in agent_response.metadata:
-                    tokens = agent_response.metadata["usage"].completion_tokens or 0
             
     
     # Calculate metrics
@@ -381,7 +275,7 @@ def fetch_history(hours: int = 1) -> pd.DataFrame:
     | extend 
         latency = todouble(todynamic(Measurements).latency),
         tokens  = toint(todynamic(Measurements).tokens),
-        tools   = split(tostring(todynamic(Properties).tools), ","),
+        tools   = tostring(todynamic(Properties).tools),
         user    = tostring(todynamic(Properties).user)
     | project Name, TimeGenerated, user, latency, tokens, tools
     | order by TimeGenerated desc
