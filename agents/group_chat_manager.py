@@ -36,6 +36,7 @@ class ChatCompletionGroupChatManager(GroupChatManager):
         "Here are the names and descriptions of the participants: "
         "{{$participants}}\n"
         "Please respond with only the name of the participant you would like to select."
+        "If the task is not clear, vague or ambiguous, respond with 'general_agent'."
     )
 
     result_filter_prompt: str = (
@@ -46,7 +47,7 @@ class ChatCompletionGroupChatManager(GroupChatManager):
 
     def __init__(self, service: ChatCompletionClientBase, **kwargs) -> None:
         """Initialize the group chat manager."""
-        super().__init__(topic="Task Coordination and delegation", service=service, **kwargs)
+        super().__init__(topic="Task Coordination and delegation", max_rounds=5, service=service, **kwargs)
 
     async def _render_prompt(self, prompt: str, arguments: KernelArguments) -> str:
         """Helper to render a prompt with arguments."""
@@ -146,7 +147,11 @@ class ChatCompletionGroupChatManager(GroupChatManager):
         if participant_name_with_reason.result in participant_descriptions:
             return participant_name_with_reason
 
-        raise RuntimeError(f"Unknown participant selected: {response.content}.")
+        return StringResult(
+            result="general_agent",
+            reason=f"Unknown participant selected: {participant_name_with_reason.result}. "
+                   f"Available participants: {', '.join(participant_descriptions.keys())}.",
+        )
 
     @override
     async def filter_results(

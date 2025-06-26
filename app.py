@@ -41,7 +41,7 @@ from semantic_kernel.contents.chat_message_content import ChatMessageContent
 
 
 
-from agents.agents_factor import create_calculator_agent, create_coordinator_agent, create_search_agent, get_agents
+from agents.agents_factor import create_calculator_agent, create_coordinator_agent, create_search_agent, get_agents, create_general_agent
 from agents.group_chat_manager import ChatCompletionGroupChatManager
 from agents.plugins import CalculatorPlugin, SearchPlugin
 
@@ -97,13 +97,14 @@ WORKSPACE_ID  = st.secrets["AZURE"]["WORKSPACE_ID"]
 search_agent: AzureAIAgent = None
 calculator_agent: ChatCompletionAgent = None
 coordinator_agent: GroupChatOrchestration = None
+general_agent: ChatCompletionAgent = None
 runtime: InProcessRuntime = None
-used_tools: list = []
+used_tools: set = set()
 
 async def initialize_agents():
     """Initialize the agents if they haven't been created yet"""
-    global search_agent, calculator_agent, coordinator_agent, runtime, used_tools
-    
+    global search_agent, calculator_agent, coordinator_agent, general_agent, runtime, used_tools
+
     if search_agent is None:
         search_agent = await create_search_agent()
 
@@ -112,8 +113,11 @@ async def initialize_agents():
 
     if coordinator_agent is None:
         coordinator_agent = await create_coordinator_agent(callback=agent_response_callback)
-    
-    used_tools = []
+
+    if general_agent is None:
+        general_agent = await create_general_agent()
+
+    used_tools = set()
         
     runtime = InProcessRuntime()
     runtime.start()
@@ -133,7 +137,7 @@ if 'coordinator_agent_messages' not in st.session_state:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def agent_response_callback(message: ChatMessageContent) -> None:
-    used_tools.append(message.name)
+    used_tools.add(message.name)
     print(f"Agent response callback: {message.content} (Tool: {message.name})")
     print(f"Used tools so far: {used_tools}")
 
@@ -141,7 +145,7 @@ async def query_agent_with_sk(user_message: str, selected_agent="auto") -> dict:
     global used_tools
     
     start = time.time()
-    used_tools = []
+    used_tools = set()
     answer = ""
     tokens = 0
     metadata = {"user_message": user_message, "selected_agent": selected_agent, "timestamp": pd.Timestamp.utcnow()}
@@ -172,8 +176,8 @@ async def query_agent_with_sk(user_message: str, selected_agent="auto") -> dict:
         )
 
         answer = agent_response.content
-        # used_tools = []
-        
+        # used_tools = set()
+
         print(f"Agent response: {agent_response.content}")
         
         # Extract token usage if available
@@ -203,8 +207,9 @@ async def query_agent_with_sk(user_message: str, selected_agent="auto") -> dict:
             )
             
             answer = agent_response.message.content
-            used_tools = ["web_search"]
+            used_tools = set(["web_search"])
             
+
             # Extract token usage if available
             if hasattr(agent_response, 'metadata') and 'usage' in agent_response.metadata:
                 tokens = agent_response.metadata["usage"].completion_tokens or 0
@@ -226,8 +231,32 @@ async def query_agent_with_sk(user_message: str, selected_agent="auto") -> dict:
             )
             
             answer = agent_response.message.content
-            used_tools = ["calculator"]
+            used_tools = set(["calculator"])
             
+
+            # Extract token usage if available
+            if hasattr(agent_response, 'metadata') and 'usage' in agent_response.metadata:
+                tokens = agent_response.metadata["usage"].completion_tokens or 0
+        elif selected_agent == "General Agent":
+            # Fallback to coordinator agent if no specific tool is selected
+            messages = st.session_state.general_agent_messages.copy()
+            messages.append(ChatMessageContent(role=AuthorRole.USER, content=user_message, metadata=metadata))
+
+            agent_response = await general_agent.get_response(
+                messages=messages,
+                temperature=0.5,
+                max_tokens=500
+            )
+            
+            # Update the message history
+            st.session_state.general_agent_messages = messages.copy()
+            st.session_state.general_agent_messages.append(
+                ChatMessageContent(role=AuthorRole.ASSISTANT, content=agent_response.message.content, metadata=metadata)
+            )
+            
+            answer = agent_response.message.content
+            used_tools = set(["general"])
+
             # Extract token usage if available
             if hasattr(agent_response, 'metadata') and 'usage' in agent_response.metadata:
                 tokens = agent_response.metadata["usage"].completion_tokens or 0
@@ -394,6 +423,7 @@ def sync_conversation_history_with_agents():
     st.session_state.search_agent_messages = []
     st.session_state.calculator_agent_messages = []
     st.session_state.coordinator_agent_messages = []
+    st.session_state.general_agent_messages = []
     
     # Now replay the conversation history into the agent messages
     for msg in st.session_state.conversation_history:
@@ -402,6 +432,7 @@ def sync_conversation_history_with_agents():
             st.session_state.search_agent_messages.append(ChatMessageContent(role=AuthorRole.USER, content=msg.content))
             st.session_state.calculator_agent_messages.append(ChatMessageContent(role=AuthorRole.USER, content=msg.content))
             st.session_state.coordinator_agent_messages.append(ChatMessageContent(role=AuthorRole.USER, content=msg.content))
+            st.session_state.general_agent_messages.append(ChatMessageContent(role=AuthorRole.USER, content=msg.content))
         elif msg.role == AuthorRole.ASSISTANT:
             # Add assistant messages to the appropriate agent history
             agent_type = msg.metadata.get("agent_type", "Coordinator")
@@ -409,6 +440,8 @@ def sync_conversation_history_with_agents():
                 st.session_state.search_agent_messages.append(ChatMessageContent(role=AuthorRole.ASSISTANT, content=msg.content))
             elif agent_type == "Calculator":
                 st.session_state.calculator_agent_messages.append(ChatMessageContent(role=AuthorRole.ASSISTANT, content=msg.content))
+            elif agent_type == "General":
+                st.session_state.general_agent_messages.append(ChatMessageContent(role=AuthorRole.ASSISTANT, content=msg.content))
             else:  # Coordinator
                 st.session_state.coordinator_agent_messages.append(ChatMessageContent(role=AuthorRole.ASSISTANT, content=msg.content))
 
@@ -457,6 +490,8 @@ with chat_tab:
                             icon = "🔍"
                         elif agent_type == "Calculator":
                             icon = "🧮"
+                        elif agent_type == "General":
+                            icon = "🌐"
                     
                     tools_used = ""
                     if "tools" in message.metadata and message.metadata["tools"]:
@@ -499,6 +534,7 @@ with chat_tab:
                 st.session_state.search_agent_messages = []
                 st.session_state.calculator_agent_messages = []
                 st.session_state.coordinator_agent_messages = []
+                st.session_state.general_agent_messages = []
                 st.rerun()
     
     with settings_col:
@@ -506,7 +542,7 @@ with chat_tab:
         
         # Agent selection with better UI
         st.markdown("**Select Agent Type:**")
-        agent_options = ["Auto (Coordinator)", "Search Agent", "Calculator Agent"]
+        agent_options = ["Auto (Coordinator)", "Search Agent", "Calculator Agent", "General Agent"]
         selected_agent = st.radio("", agent_options, index=0)
         
         # Export conversation option
@@ -536,6 +572,7 @@ with chat_tab:
         - **🤖 Coordinator:** Manages routing between specialized agents
         - **🔍 Search:** Specialized in web search tasks
         - **🧮 Calculator:** Specialized in math calculations
+        - **🌐 General:** Handles general queries without specialized tools
         """)
         
         # Add some usage tips
@@ -569,11 +606,13 @@ with chat_tab:
             # Determine agent type for the response
             agent_type = "Coordinator"
             if len(rec["tools"]) == 1:
-                if rec["tools"][0] == "web_search":
+                if "web_search" in rec["tools"]:
                     agent_type = "Search"
-                elif rec["tools"][0] == "calculator":
+                elif "calculator" in rec["tools"]:
                     agent_type = "Calculator"
-            
+                elif "general_agent" in rec["tools"]:
+                    agent_type = "General"
+
             # Add assistant response to conversation history
             st.session_state.conversation_history.append(
                 ChatMessageContent(
@@ -629,6 +668,7 @@ with dashboard_tab:
             avg_lat = df.latency.mean()
             p95_lat = df.latency.quantile(0.95)
             avg_tok = df.tokens.mean() if 'tokens' in df.columns and not df.tokens.empty else 0
+            med_tok = df.tokens.median() if 'tokens' in df.columns and not df.tokens.empty else 0
             tot_q = len(df)
             
             c1, c2 = st.columns(2)
@@ -647,7 +687,7 @@ with dashboard_tab:
                 with slo_col2:
                     slo_target = st.number_input("Target Latency (s)", 
                                                  min_value=0.1, 
-                                                 max_value=10.0, 
+                                                 max_value=30.0, 
                                                  value=2.0, 
                                                  step=0.1,
                                                  help="Target response time in seconds")
@@ -716,6 +756,7 @@ with dashboard_tab:
         with metrics_col2:
             c1, c2 = st.columns(2)
             c1.metric("Avg Tokens", f"{avg_tok:.0f}")
+            c1.metric("Med Tokens", f"{med_tok:.0f}")
             c2.metric("Unique Queries", df['user'].nunique() if 'user' in df.columns else "N/A")
             
             # Agent Usage

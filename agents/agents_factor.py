@@ -64,6 +64,19 @@ async def create_calculator_agent():
      
     return agent
 
+async def create_general_agent():
+    kernel, settings = get_kernel_settings()
+    
+    agent = ChatCompletionAgent(
+        kernel=kernel,
+        name="general_agent",
+        description="A general-purpose agent that can assist with tasks that do not require specialized knowledge, skills or web search.",
+        instructions="You are a general-purpose agent that can assist with tasks that do not require specialized knowledge, skills or web search. For e.g. greeting the user, providing general information, dad jokes,  etc.",
+        arguments=KernelArguments(settings=settings),
+    )
+     
+    return agent
+
 
 
 async def get_coordinator_agent() -> Agent:
@@ -108,8 +121,9 @@ async def get_agents() -> list[Agent]:
     kernel, settings = get_kernel_settings()
     search_agent = await create_search_agent()
     calculator_agent = await create_calculator_agent()
-    
-    return [search_agent, calculator_agent]
+    general_agent = await create_general_agent()
+
+    return [search_agent, calculator_agent, general_agent]
 
 
 async def create_coordinator_agent(callback) -> GroupChatOrchestration:
